@@ -71,6 +71,9 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
         payload=payload_str
     )
     
+    if source == "B" and topic == "notas" and venda_id_int is None and id_nota_fiscal_int is None:
+        return JSONResponse(content={"ok": True, "status": "ignored", "reason": "missing_venda_id_and_id_nota_fiscal"})
+    
     job_type = determine_job_type(source, topic, codigo_situacao_raw)
     dedupe_key = generate_dedupe_key(source, topic, venda_id_int, job_type)
     

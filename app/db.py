@@ -212,15 +212,18 @@ async def update_job_done(job_id, action_preview: dict) -> None:
         try:
             await conn.execute("""
                 UPDATE public.jobs
-                SET status = 'done', action_preview = $2::jsonb, updated_at = NOW()
+                SET status = 'done', action_preview = $2::jsonb
                 WHERE id = $1
             """, job_id, action_preview_str)
         except Exception:
-            await conn.execute("""
-                UPDATE public.jobs
-                SET status = 'done', updated_at = NOW()
-                WHERE id = $1
-            """, job_id)
+            try:
+                await conn.execute("""
+                    UPDATE public.jobs
+                    SET status = 'done'
+                    WHERE id = $1
+                """, job_id)
+            except Exception as e:
+                logger.error(f"Failed to update job done: {e}")
 
 
 async def update_job_failed(job_id, error: str, attempts: int) -> None:
@@ -230,21 +233,31 @@ async def update_job_failed(job_id, error: str, attempts: int) -> None:
         try:
             await conn.execute("""
                 UPDATE public.jobs
-                SET status = $2, last_error = $3, attempts = $4, last_attempt_at = NOW(), updated_at = NOW()
+                SET status = $2, last_error = $3, attempts = $4, last_attempt_at = NOW()
                 WHERE id = $1
             """, job_id, new_status, error, attempts)
-        except Exception as e:
-            logger.error(f"Failed to update job failed status: {e}")
+        except Exception:
+            try:
+                await conn.execute("""
+                    UPDATE public.jobs
+                    SET status = $2
+                    WHERE id = $1
+                """, job_id, new_status)
+            except Exception as e:
+                logger.error(f"Failed to update job failed status: {e}")
 
 
 async def upsert_orders_map(external_key: str, venda_a_id: int | None) -> None:
     p = await get_pool()
     async with p.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO public.orders_map (external_key, venda_a_id, updated_at)
-            VALUES ($1::text, $2::integer, NOW())
-            ON CONFLICT (external_key) DO UPDATE SET venda_a_id = $2::integer, updated_at = NOW()
-        """, external_key, venda_a_id)
+        try:
+            await conn.execute("""
+                INSERT INTO public.orders_map (external_key, venda_a_id)
+                VALUES ($1::text, $2::integer)
+                ON CONFLICT (external_key) DO UPDATE SET venda_a_id = $2::integer
+            """, external_key, venda_a_id)
+        except Exception as e:
+            logger.error(f"Failed to upsert orders_map: {e}")
 
 
 async def get_events_count() -> int:
@@ -268,7 +281,10 @@ async def get_last_event_at() -> datetime | None:
 async def get_last_job_done_at() -> datetime | None:
     p = await get_pool()
     async with p.acquire() as conn:
-        return await conn.fetchval("SELECT MAX(updated_at) FROM public.jobs WHERE status = 'done'")
+        try:
+            return await conn.fetchval("SELECT MAX(created_at) FROM public.jobs WHERE status = 'done'")
+        except Exception:
+            return None
 
 
 async def get_jobs_list(status: str, limit: int) -> list[dict]:

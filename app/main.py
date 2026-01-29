@@ -32,6 +32,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Tiny Webhooks Receiver", lifespan=lifespan)
 
 
+@app.get("/")
+async def root():
+    return {"status": "ok"}
+
+
 async def process_webhook(request: Request, source: str, topic: str) -> JSONResponse:
     payload = await request.json()
     

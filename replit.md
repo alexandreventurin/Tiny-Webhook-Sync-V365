@@ -27,26 +27,40 @@ app/
 - `POST /webhooks/b/enviados` - Webhook for source B shipments
 
 ### Admin
-- `GET /health` - Health check with metrics:
-  - events_total, jobs_queued, jobs_failed, jobs_dead
-  - last_event_at, last_job_done_at
-- `GET /admin/jobs?status=queued&limit=50` - List jobs by status
+- `GET /health` - Health check with metrics
+- `GET /admin/jobs?status=queued&limit=50` - List jobs by status (includes payload, action_preview)
 - `POST /admin/jobs/run?limit=50` - Manual job processing round
 
 ## Database Tables
 - `public.events` - Stores all webhook events with deduplication
-- `public.jobs` - Job queue for processing
+- `public.jobs` - Job queue for processing (includes payload, action_preview)
 - `public.orders_map` - Maps external keys to order IDs
+
+## Job Payload Structure
+Jobs are created with structured payload:
+```json
+{
+  "source": "A|B",
+  "topic": "vendas|notas|enviados",
+  "venda_id": "string|null",
+  "codigo_situacao": "string|null",
+  "id_nota_fiscal": "string|null"
+}
+```
 
 ## Job Types
 - `create_order_b` - Triggered by A/vendas/aprovado (codigoSituacao=3)
+  - Requires venda_id, fails with "missing_venda_id" if absent
+  - external_key = "A:" + venda_id
 - `sync_status` - Triggered by B/notas/faturado (4) or B/enviados/enviado (5)
 - `noop` - All other combinations
 
 ## Worker
 - Background task runs every 5 seconds
+- Resets stale locks (running > 2 minutes) before fetching jobs
 - Fetches and locks queued jobs
-- Processes jobs and sets action_preview (dry-run, no API calls)
+- Uses job payload for processing (not raw event payload)
+- Clears locked_at/locked_by on completion
 - Handles errors with retry logic (max 5 attempts)
 
 ## Running

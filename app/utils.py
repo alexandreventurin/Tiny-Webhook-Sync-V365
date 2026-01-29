@@ -22,7 +22,7 @@ def generate_event_key(
     source: str,
     topic: str,
     venda_id: int | None,
-    codigo_situacao: int | None,
+    codigo_situacao: str | None,
     id_nota_fiscal: int | None,
     payload: dict
 ) -> str:
@@ -48,19 +48,40 @@ def generate_dedupe_key(
     return ":".join(parts)
 
 
-def determine_job_type(source: str, topic: str, codigo_situacao: int | None) -> str:
-    status_map = {
-        3: "aprovado",
-        4: "faturado",
-        5: "enviado"
-    }
-    status = status_map.get(codigo_situacao) if codigo_situacao else None
+def normalize_status(codigo_situacao) -> str | None:
+    if codigo_situacao is None:
+        return None
+    if isinstance(codigo_situacao, int):
+        status_map = {
+            3: "aprovado",
+            4: "faturado",
+            5: "enviado",
+            6: "pronto_envio",
+            7: "entregue",
+            9: "cancelado"
+        }
+        return status_map.get(codigo_situacao)
+    s = str(codigo_situacao).strip().lower()
+    return s if s else None
+
+
+def determine_job_type(source: str, topic: str, codigo_situacao) -> str:
+    status = normalize_status(codigo_situacao)
     
-    if source == "A" and topic == "vendas" and status == "aprovado":
-        return "create_order_b"
-    if source == "B" and topic == "notas" and status == "faturado":
-        return "sync_status"
-    if source == "B" and topic == "enviados" and status == "enviado":
-        return "sync_status"
+    if source == "A" and topic == "vendas":
+        if status == "aprovado":
+            return "create_order_b"
+        if status in ("pronto_envio", "entregue"):
+            return "sync_status"
+        if status == "cancelado":
+            return "sync_status"
+    
+    if source == "B" and topic == "notas":
+        if status == "faturado":
+            return "sync_status"
+    
+    if source == "B" and topic == "enviados":
+        if status == "enviado":
+            return "sync_status"
     
     return "noop"

@@ -40,14 +40,15 @@ async def root():
 async def process_webhook(request: Request, source: str, topic: str) -> JSONResponse:
     payload = await request.json()
     
-    dados = payload.get("dados", {})
+    dados = payload.get("dados") or {}
     venda_id_raw = dados.get("id")
-    codigo_situacao_raw = dados.get("codigoSituacao")
-    id_nota_fiscal_raw = dados.get("idNotaFiscal")
+    codigo_situacao_raw = dados.get("codigoSituacao") or dados.get("codigo_situacao")
+    id_nota_fiscal_raw = dados.get("idNotaFiscal") or dados.get("id_nota_fiscal")
     
     venda_id_int = to_int_or_none(venda_id_raw)
-    codigo_situacao_int = to_int_or_none(codigo_situacao_raw)
     id_nota_fiscal_int = to_int_or_none(id_nota_fiscal_raw)
+    codigo_situacao_str = str(codigo_situacao_raw).strip() if codigo_situacao_raw is not None else None
+    id_nota_fiscal_str = str(id_nota_fiscal_int) if id_nota_fiscal_int is not None else None
     
     payload_str = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     
@@ -55,7 +56,7 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
         source=source,
         topic=topic,
         venda_id=venda_id_int,
-        codigo_situacao=codigo_situacao_int,
+        codigo_situacao=codigo_situacao_str,
         id_nota_fiscal=id_nota_fiscal_int,
         payload=payload
     )
@@ -65,20 +66,20 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
         source=source,
         topic=topic,
         venda_id=venda_id_int,
-        codigo_situacao=codigo_situacao_int,
-        id_nota_fiscal=id_nota_fiscal_int,
+        codigo_situacao=codigo_situacao_str,
+        id_nota_fiscal=id_nota_fiscal_str,
         payload=payload_str
     )
     
-    job_type = determine_job_type(source, topic, codigo_situacao_int)
+    job_type = determine_job_type(source, topic, codigo_situacao_raw)
     dedupe_key = generate_dedupe_key(source, topic, venda_id_int, job_type)
     
     job_payload = {
         "source": source,
         "topic": topic,
         "venda_id": str(venda_id_int) if venda_id_int is not None else None,
-        "codigo_situacao": str(codigo_situacao_int) if codigo_situacao_int is not None else None,
-        "id_nota_fiscal": str(id_nota_fiscal_int) if id_nota_fiscal_int is not None else None
+        "codigo_situacao": codigo_situacao_str,
+        "id_nota_fiscal": id_nota_fiscal_str
     }
     
     await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload)
@@ -126,7 +127,7 @@ async def health():
 
 
 @app.get("/admin/jobs", response_model=JobsListResponse)
-async def admin_jobs(status: str = "queued", limit: int = 50):
+async def admin_jobs(status: str | None = None, limit: int = 50):
     jobs = await get_jobs_list(status=status, limit=limit)
     return JobsListResponse(
         jobs=[JobItem(**job) for job in jobs]

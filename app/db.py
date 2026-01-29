@@ -140,19 +140,19 @@ async def insert_event(
     source: str,
     topic: str,
     venda_id: int | None,
-    codigo_situacao: int | None,
-    id_nota_fiscal: int | None,
+    codigo_situacao: str | None,
+    id_nota_fiscal: str | None,
     payload: str
-) -> int | None:
+) -> str | None:
     p = await get_pool()
     async with p.acquire() as conn:
         row = await conn.fetchrow("""
             INSERT INTO public.events (event_key, source, topic, venda_id, codigo_situacao, id_nota_fiscal, payload)
-            VALUES ($1::text, $2::text, $3::text, $4::integer, $5::integer, $6::integer, $7::jsonb)
+            VALUES ($1::text, $2::text, $3::text, $4::integer, $5::text, $6::text, $7::jsonb)
             ON CONFLICT (event_key) DO NOTHING
             RETURNING id
         """, event_key, source, topic, venda_id, codigo_situacao, id_nota_fiscal, payload)
-        return row["id"] if row else None
+        return str(row["id"]) if row else None
 
 
 async def insert_job(job_type: str, dedupe_key: str, event_id: str | None, payload: dict | None = None) -> bool:
@@ -312,24 +312,40 @@ async def get_last_job_done_at() -> datetime | None:
             return None
 
 
-async def get_jobs_list(status: str, limit: int) -> list[dict]:
+async def get_jobs_list(status: str | None, limit: int) -> list[dict]:
     p = await get_pool()
     async with p.acquire() as conn:
         try:
-            rows = await conn.fetch("""
-                SELECT id, job_type, dedupe_key, status, created_at, payload, action_preview
-                FROM public.jobs
-                WHERE status = $1
-                ORDER BY created_at DESC
-                LIMIT $2
-            """, status, limit)
+            if status:
+                rows = await conn.fetch("""
+                    SELECT id, job_type, dedupe_key, status, created_at, payload, action_preview
+                    FROM public.jobs
+                    WHERE status = $1
+                    ORDER BY created_at DESC
+                    LIMIT $2
+                """, status, limit)
+            else:
+                rows = await conn.fetch("""
+                    SELECT id, job_type, dedupe_key, status, created_at, payload, action_preview
+                    FROM public.jobs
+                    ORDER BY created_at DESC
+                    LIMIT $1
+                """, limit)
             return [dict(row) for row in rows]
         except Exception:
-            rows = await conn.fetch("""
-                SELECT id, job_type, dedupe_key, status, created_at
-                FROM public.jobs
-                WHERE status = $1
-                ORDER BY created_at DESC
-                LIMIT $2
-            """, status, limit)
+            if status:
+                rows = await conn.fetch("""
+                    SELECT id, job_type, dedupe_key, status, created_at
+                    FROM public.jobs
+                    WHERE status = $1
+                    ORDER BY created_at DESC
+                    LIMIT $2
+                """, status, limit)
+            else:
+                rows = await conn.fetch("""
+                    SELECT id, job_type, dedupe_key, status, created_at
+                    FROM public.jobs
+                    ORDER BY created_at DESC
+                    LIMIT $1
+                """, limit)
             return [dict(row) for row in rows]

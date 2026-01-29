@@ -272,14 +272,16 @@ async def update_job_failed(job_id, error: str, attempts: int) -> None:
                 logger.error(f"Failed to update job failed status: {e}")
 
 
-async def upsert_orders_map(external_key: str, venda_a_id: int | None) -> None:
+async def upsert_orders_map(external_key: str, venda_a_id: str | None) -> None:
     p = await get_pool()
     async with p.acquire() as conn:
         try:
             await conn.execute("""
-                INSERT INTO public.orders_map (external_key, venda_a_id)
-                VALUES ($1::text, $2::integer)
-                ON CONFLICT (external_key) DO UPDATE SET venda_a_id = $2::integer
+                INSERT INTO public.orders_map (external_key, venda_a_id, updated_at)
+                VALUES ($1::text, $2::text, NOW())
+                ON CONFLICT (external_key) DO UPDATE SET 
+                    venda_a_id = EXCLUDED.venda_a_id,
+                    updated_at = NOW()
             """, external_key, venda_a_id)
         except Exception as e:
             logger.error(f"Failed to upsert orders_map: {e}")

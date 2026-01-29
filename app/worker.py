@@ -45,12 +45,7 @@ async def process_job(job: dict) -> None:
             
             external_key = f"A:{venda_id}"
             
-            try:
-                venda_id_int = int(venda_id)
-            except (ValueError, TypeError):
-                venda_id_int = None
-            
-            await upsert_orders_map(external_key=external_key, venda_a_id=venda_id_int)
+            await upsert_orders_map(external_key=external_key, venda_a_id=str(venda_id))
             
             action_preview = {
                 "would": "create_order_in_B",

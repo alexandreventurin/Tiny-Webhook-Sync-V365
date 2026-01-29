@@ -71,6 +71,18 @@ async def process_job(job: dict) -> None:
             await update_job_done(job_id, action_preview)
             logger.info(f"Job {job_id} completed: sync_status")
         
+        elif job_type == 'sync_nf_link':
+            url_danfe = payload.get('url_danfe')
+            action_preview = {
+                "would": "sync_nf_link",
+                "id_nota_fiscal": id_nota_fiscal,
+                "url_danfe": url_danfe,
+                "note": "later we will call GET /notas/{idNota}/link or /notas/{idNota} to resolve venda"
+            }
+            
+            await update_job_done(job_id, action_preview)
+            logger.info(f"Job {job_id} completed: sync_nf_link for NF {id_nota_fiscal}")
+        
         elif job_type == 'noop':
             action_preview = {
                 "would": "noop",

@@ -110,6 +110,58 @@ async def webhook_b_enviados(request: Request):
     return await process_webhook(request, source="B", topic="enviados")
 
 
+@app.post("/webhooks/b/notas_fiscais", response_model=WebhookResponse)
+async def webhook_b_notas_fiscais(request: Request):
+    payload = await request.json()
+    
+    dados = payload.get("dados") or {}
+    id_nota_fiscal_raw = dados.get("idNotaFiscalTiny") or dados.get("id_nota_fiscal_tiny")
+    url_danfe = dados.get("urlDanfe") or dados.get("url_danfe")
+    
+    id_nota_fiscal_int = to_int_or_none(id_nota_fiscal_raw)
+    id_nota_fiscal_str = str(id_nota_fiscal_int) if id_nota_fiscal_int is not None else None
+    
+    payload_str = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    
+    event_key = generate_event_key(
+        source="B",
+        topic="notas_fiscais",
+        venda_id=None,
+        codigo_situacao=None,
+        id_nota_fiscal=id_nota_fiscal_int,
+        payload=payload
+    )
+    
+    await insert_event(
+        event_key=event_key,
+        source="B",
+        topic="notas_fiscais",
+        venda_id=None,
+        codigo_situacao=None,
+        id_nota_fiscal=id_nota_fiscal_str,
+        payload=payload_str
+    )
+    
+    if id_nota_fiscal_int is None:
+        return JSONResponse(content={"ok": True, "status": "ignored", "reason": "missing_id_nota_fiscal"})
+    
+    job_type = "sync_nf_link"
+    dedupe_key = f"B:notas_fiscais:{id_nota_fiscal_str}:{job_type}"
+    
+    job_payload = {
+        "source": "B",
+        "topic": "notas_fiscais",
+        "venda_id": None,
+        "codigo_situacao": None,
+        "id_nota_fiscal": id_nota_fiscal_str,
+        "url_danfe": url_danfe
+    }
+    
+    await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload)
+    
+    return JSONResponse(content={"ok": True})
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health():
     events_total = await get_events_count()

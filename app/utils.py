@@ -84,4 +84,7 @@ def determine_job_type(source: str, topic: str, codigo_situacao) -> str:
         if status == "enviado":
             return "sync_status"
     
+    if source == "B" and topic == "notas_fiscais":
+        return "sync_nf_link"
+    
     return "noop"

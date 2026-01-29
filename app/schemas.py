@@ -21,6 +21,10 @@ class WebhookResponse(BaseModel):
 class HealthResponse(BaseModel):
     events_total: int
     jobs_queued: int
+    jobs_failed: int
+    jobs_dead: int
+    last_event_at: Optional[datetime] = None
+    last_job_done_at: Optional[datetime] = None
 
 
 class JobItem(BaseModel):
@@ -33,3 +37,7 @@ class JobItem(BaseModel):
 
 class JobsListResponse(BaseModel):
     jobs: list[JobItem]
+
+
+class RunJobsResponse(BaseModel):
+    processed: int

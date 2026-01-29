@@ -1,18 +1,31 @@
 import json
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.db import init_db, close_db, insert_event, insert_job, get_events_count, get_jobs_queued_count, get_jobs_list
-from app.schemas import WebhookResponse, HealthResponse, JobsListResponse, JobItem
+from app.db import (
+    init_db, close_db, insert_event, insert_job,
+    get_events_count, get_jobs_count_by_status,
+    get_jobs_list, get_last_event_at, get_last_job_done_at
+)
+from app.schemas import WebhookResponse, HealthResponse, JobsListResponse, JobItem, RunJobsResponse
 from app.utils import generate_event_key, generate_dedupe_key, determine_job_type
+from app.worker import worker_loop, stop_worker, run_worker_once
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    worker_task = asyncio.create_task(worker_loop())
     yield
+    stop_worker()
+    worker_task.cancel()
+    try:
+        await worker_task
+    except asyncio.CancelledError:
+        pass
     await close_db()
 
 
@@ -51,7 +64,7 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
     job_type = determine_job_type(source, topic, codigo_situacao)
     dedupe_key = generate_dedupe_key(source, topic, venda_id, job_type)
     
-    await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=event_id)
+    await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=event_id, payload=payload)
     
     return JSONResponse(content={"ok": True})
 
@@ -79,8 +92,20 @@ async def webhook_b_enviados(request: Request):
 @app.get("/health", response_model=HealthResponse)
 async def health():
     events_total = await get_events_count()
-    jobs_queued = await get_jobs_queued_count()
-    return HealthResponse(events_total=events_total, jobs_queued=jobs_queued)
+    jobs_queued = await get_jobs_count_by_status('queued')
+    jobs_failed = await get_jobs_count_by_status('failed')
+    jobs_dead = await get_jobs_count_by_status('dead')
+    last_event_at = await get_last_event_at()
+    last_job_done_at = await get_last_job_done_at()
+    
+    return HealthResponse(
+        events_total=events_total,
+        jobs_queued=jobs_queued,
+        jobs_failed=jobs_failed,
+        jobs_dead=jobs_dead,
+        last_event_at=last_event_at,
+        last_job_done_at=last_job_done_at
+    )
 
 
 @app.get("/admin/jobs", response_model=JobsListResponse)
@@ -89,3 +114,9 @@ async def admin_jobs(status: str = "queued", limit: int = 50):
     return JobsListResponse(
         jobs=[JobItem(**job) for job in jobs]
     )
+
+
+@app.post("/admin/jobs/run", response_model=RunJobsResponse)
+async def admin_run_jobs(limit: int = 50):
+    processed = await run_worker_once(limit=limit)
+    return RunJobsResponse(processed=processed)

@@ -11,7 +11,7 @@ from app.db import (
     get_jobs_list, get_last_event_at, get_last_job_done_at
 )
 from app.schemas import WebhookResponse, HealthResponse, JobsListResponse, JobItem, RunJobsResponse
-from app.utils import generate_event_key, generate_dedupe_key, determine_job_type
+from app.utils import generate_event_key, generate_dedupe_key, determine_job_type, to_int_or_none
 from app.worker import worker_loop, stop_worker, run_worker_once
 
 
@@ -41,40 +41,44 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
     payload = await request.json()
     
     dados = payload.get("dados", {})
-    venda_id = dados.get("id")
-    codigo_situacao = dados.get("codigoSituacao")
-    id_nota_fiscal = dados.get("idNotaFiscal")
+    venda_id_raw = dados.get("id")
+    codigo_situacao_raw = dados.get("codigoSituacao")
+    id_nota_fiscal_raw = dados.get("idNotaFiscal")
+    
+    venda_id_int = to_int_or_none(venda_id_raw)
+    codigo_situacao_int = to_int_or_none(codigo_situacao_raw)
+    id_nota_fiscal_int = to_int_or_none(id_nota_fiscal_raw)
     
     payload_str = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     
     event_key = generate_event_key(
         source=source,
         topic=topic,
-        venda_id=venda_id,
-        codigo_situacao=codigo_situacao,
-        id_nota_fiscal=id_nota_fiscal,
+        venda_id=venda_id_int,
+        codigo_situacao=codigo_situacao_int,
+        id_nota_fiscal=id_nota_fiscal_int,
         payload=payload
     )
     
-    event_id = await insert_event(
+    await insert_event(
         event_key=event_key,
         source=source,
         topic=topic,
-        venda_id=venda_id,
-        codigo_situacao=codigo_situacao,
-        id_nota_fiscal=id_nota_fiscal,
+        venda_id=venda_id_int,
+        codigo_situacao=codigo_situacao_int,
+        id_nota_fiscal=id_nota_fiscal_int,
         payload=payload_str
     )
     
-    job_type = determine_job_type(source, topic, codigo_situacao)
-    dedupe_key = generate_dedupe_key(source, topic, venda_id, job_type)
+    job_type = determine_job_type(source, topic, codigo_situacao_int)
+    dedupe_key = generate_dedupe_key(source, topic, venda_id_int, job_type)
     
     job_payload = {
         "source": source,
         "topic": topic,
-        "venda_id": str(venda_id) if venda_id is not None else None,
-        "codigo_situacao": str(codigo_situacao) if codigo_situacao is not None else None,
-        "id_nota_fiscal": str(id_nota_fiscal) if id_nota_fiscal is not None else None
+        "venda_id": str(venda_id_int) if venda_id_int is not None else None,
+        "codigo_situacao": str(codigo_situacao_int) if codigo_situacao_int is not None else None,
+        "id_nota_fiscal": str(id_nota_fiscal_int) if id_nota_fiscal_int is not None else None
     }
     
     await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload)

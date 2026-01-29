@@ -2,6 +2,17 @@ import hashlib
 import json
 
 
+def to_int_or_none(x):
+    if x is None:
+        return None
+    if isinstance(x, int):
+        return x
+    s = str(x).strip()
+    if s.isdigit():
+        return int(s)
+    return None
+
+
 def compute_payload_hash(payload: dict) -> str:
     payload_str = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(payload_str.encode()).hexdigest()[:16]

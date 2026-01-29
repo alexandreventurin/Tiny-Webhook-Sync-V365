@@ -1,46 +1,64 @@
 import asyncpg
-from contextlib import asynccontextmanager
+import ssl
+import logging
 from typing import Optional
 
 from app.settings import settings
 
 pool: Optional[asyncpg.Pool] = None
+logger = logging.getLogger(__name__)
 
 
 async def init_db():
     global pool
-    pool = await asyncpg.create_pool(settings.database_url, min_size=2, max_size=10)
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
     
-    async with pool.acquire() as conn:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS public.events (
-                id SERIAL PRIMARY KEY,
-                event_key TEXT UNIQUE NOT NULL,
-                source TEXT NOT NULL,
-                topic TEXT NOT NULL,
-                venda_id INTEGER,
-                codigo_situacao INTEGER,
-                id_nota_fiscal INTEGER,
-                payload JSONB NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
+    try:
+        pool = await asyncpg.create_pool(
+            settings.database_url,
+            min_size=1,
+            max_size=10,
+            ssl=ssl_context,
+            command_timeout=60,
+            timeout=30
+        )
         
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS public.jobs (
-                id SERIAL PRIMARY KEY,
-                job_type TEXT NOT NULL,
-                dedupe_key TEXT UNIQUE NOT NULL,
-                status TEXT NOT NULL DEFAULT 'queued',
-                event_id INTEGER REFERENCES public.events(id),
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                updated_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_jobs_status ON public.jobs(status)
-        """)
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS public.events (
+                    id SERIAL PRIMARY KEY,
+                    event_key TEXT UNIQUE NOT NULL,
+                    source TEXT NOT NULL,
+                    topic TEXT NOT NULL,
+                    venda_id INTEGER,
+                    codigo_situacao INTEGER,
+                    id_nota_fiscal INTEGER,
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS public.jobs (
+                    id SERIAL PRIMARY KEY,
+                    job_type TEXT NOT NULL,
+                    dedupe_key TEXT UNIQUE NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    event_id INTEGER REFERENCES public.events(id),
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_jobs_status ON public.jobs(status)
+            """)
+        logger.info("Database connected and tables created")
+    except Exception as e:
+        logger.error(f"Failed to connect to database: {e}")
+        raise
 
 
 async def close_db():

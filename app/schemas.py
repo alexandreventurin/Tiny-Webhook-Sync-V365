@@ -33,6 +33,8 @@ class JobItem(BaseModel):
     dedupe_key: str
     status: str
     created_at: datetime
+    payload: Optional[Any] = None
+    action_preview: Optional[Any] = None
 
 
 class JobsListResponse(BaseModel):

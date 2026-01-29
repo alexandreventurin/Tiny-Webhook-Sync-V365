@@ -7,7 +7,8 @@ from app.db import (
     fetch_and_lock_jobs,
     update_job_done,
     update_job_failed,
-    upsert_orders_map
+    upsert_orders_map,
+    reset_stale_locks
 )
 
 logger = logging.getLogger(__name__)
@@ -29,24 +30,34 @@ async def process_job(job: dict) -> None:
     elif payload is None:
         payload = {}
     
+    source = payload.get('source')
+    venda_id = payload.get('venda_id')
+    codigo_situacao = payload.get('codigo_situacao')
+    id_nota_fiscal = payload.get('id_nota_fiscal')
+    topic = payload.get('topic')
+    
     try:
         if job_type == 'create_order_b':
-            venda_id = None
-            if isinstance(payload, dict):
-                dados = payload.get('dados', {})
-                if isinstance(dados, dict):
-                    venda_id = dados.get('id')
-                if venda_id is None:
-                    venda_id = payload.get('venda_id')
+            if not venda_id:
+                await update_job_failed(job_id, "missing_venda_id", attempts)
+                logger.warning(f"Job {job_id} failed: missing_venda_id")
+                return
             
-            external_key = f"A:{venda_id}" if venda_id else "A:unknown"
+            external_key = f"A:{venda_id}"
             
-            await upsert_orders_map(external_key=external_key, venda_a_id=venda_id)
+            try:
+                venda_id_int = int(venda_id)
+            except (ValueError, TypeError):
+                venda_id_int = None
+            
+            await upsert_orders_map(external_key=external_key, venda_a_id=venda_id_int)
             
             action_preview = {
                 "would": "create_order_in_B",
                 "external_key": external_key,
-                "venda_a_id": venda_id
+                "venda_a_id": venda_id,
+                "source": source,
+                "topic": topic
             }
             
             await update_job_done(job_id, action_preview)
@@ -55,20 +66,33 @@ async def process_job(job: dict) -> None:
         elif job_type == 'sync_status':
             action_preview = {
                 "would": "sync_status",
-                "details": payload
+                "source": source,
+                "topic": topic,
+                "venda_id": venda_id,
+                "codigo_situacao": codigo_situacao,
+                "id_nota_fiscal": id_nota_fiscal
             }
             
             await update_job_done(job_id, action_preview)
             logger.info(f"Job {job_id} completed: sync_status")
         
         elif job_type == 'noop':
-            action_preview = {"would": "noop"}
+            action_preview = {
+                "would": "noop",
+                "source": source,
+                "topic": topic
+            }
             
             await update_job_done(job_id, action_preview)
             logger.info(f"Job {job_id} completed: noop")
         
         else:
-            action_preview = {"would": "unknown", "job_type": job_type}
+            action_preview = {
+                "would": "unknown",
+                "job_type": job_type,
+                "source": source,
+                "topic": topic
+            }
             await update_job_done(job_id, action_preview)
             logger.warning(f"Job {job_id} completed with unknown job_type: {job_type}")
     
@@ -79,6 +103,8 @@ async def process_job(job: dict) -> None:
 
 
 async def run_worker_once(limit: int = 25) -> int:
+    await reset_stale_locks()
+    
     jobs = await fetch_and_lock_jobs(limit=limit)
     
     if not jobs:

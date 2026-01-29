@@ -155,28 +155,53 @@ async def insert_event(
         return row["id"] if row else None
 
 
-async def insert_job(job_type: str, dedupe_key: str, event_id: int | None, payload: dict | None = None) -> bool:
+async def insert_job(job_type: str, dedupe_key: str, event_id: str | None, payload: dict | None = None) -> bool:
     p = await get_pool()
-    payload_str = json.dumps(payload) if payload else None
+    payload_str = json.dumps(payload) if payload else '{}'
     async with p.acquire() as conn:
         try:
             result = await conn.execute("""
-                INSERT INTO public.jobs (job_type, dedupe_key, status, event_id, payload)
-                VALUES ($1::text, $2::text, 'queued', $3::integer, $4::jsonb)
-                ON CONFLICT (dedupe_key) DO NOTHING
-            """, job_type, dedupe_key, event_id, payload_str)
-            return result == "INSERT 0 1"
-        except Exception:
+                INSERT INTO public.jobs (job_type, dedupe_key, status, payload)
+                VALUES ($1::text, $2::text, 'queued', $3::jsonb)
+                ON CONFLICT (dedupe_key) DO UPDATE 
+                SET payload = COALESCE(NULLIF($3::jsonb, '{}'::jsonb), public.jobs.payload)
+            """, job_type, dedupe_key, payload_str)
+            return "INSERT" in result or "UPDATE" in result
+        except Exception as e:
+            logger.error(f"Failed to insert job: {e}")
             try:
                 result = await conn.execute("""
                     INSERT INTO public.jobs (job_type, dedupe_key, status)
                     VALUES ($1::text, $2::text, 'queued')
                     ON CONFLICT (dedupe_key) DO NOTHING
                 """, job_type, dedupe_key)
-                return result == "INSERT 0 1"
-            except Exception as e:
-                logger.error(f"Failed to insert job: {e}")
+                return "INSERT" in result
+            except Exception as e2:
+                logger.error(f"Failed to insert job fallback: {e2}")
                 return False
+
+
+async def reset_stale_locks() -> int:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        try:
+            result = await conn.execute("""
+                UPDATE public.jobs
+                SET status = 'queued', 
+                    attempts = COALESCE(attempts, 0) + 1,
+                    last_error = 'stale_lock_reset',
+                    locked_at = NULL,
+                    locked_by = NULL,
+                    run_after = NOW()
+                WHERE status = 'running' AND locked_at < NOW() - INTERVAL '2 minutes'
+            """)
+            count = int(result.split()[-1]) if result else 0
+            if count > 0:
+                logger.info(f"Reset {count} stale locked jobs")
+            return count
+        except Exception as e:
+            logger.error(f"Failed to reset stale locks: {e}")
+            return 0
 
 
 async def fetch_and_lock_jobs(limit: int = 25) -> list[dict]:
@@ -212,14 +237,14 @@ async def update_job_done(job_id, action_preview: dict) -> None:
         try:
             await conn.execute("""
                 UPDATE public.jobs
-                SET status = 'done', action_preview = $2::jsonb
+                SET status = 'done', action_preview = $2::jsonb, locked_at = NULL, locked_by = NULL
                 WHERE id = $1
             """, job_id, action_preview_str)
         except Exception:
             try:
                 await conn.execute("""
                     UPDATE public.jobs
-                    SET status = 'done'
+                    SET status = 'done', locked_at = NULL, locked_by = NULL
                     WHERE id = $1
                 """, job_id)
             except Exception as e:
@@ -233,14 +258,14 @@ async def update_job_failed(job_id, error: str, attempts: int) -> None:
         try:
             await conn.execute("""
                 UPDATE public.jobs
-                SET status = $2, last_error = $3, attempts = $4, last_attempt_at = NOW()
+                SET status = $2, last_error = $3, attempts = $4, last_attempt_at = NOW(), locked_at = NULL, locked_by = NULL
                 WHERE id = $1
             """, job_id, new_status, error, attempts)
         except Exception:
             try:
                 await conn.execute("""
                     UPDATE public.jobs
-                    SET status = $2
+                    SET status = $2, locked_at = NULL, locked_by = NULL
                     WHERE id = $1
                 """, job_id, new_status)
             except Exception as e:
@@ -290,11 +315,21 @@ async def get_last_job_done_at() -> datetime | None:
 async def get_jobs_list(status: str, limit: int) -> list[dict]:
     p = await get_pool()
     async with p.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT id, job_type, dedupe_key, status, created_at
-            FROM public.jobs
-            WHERE status = $1
-            ORDER BY created_at DESC
-            LIMIT $2
-        """, status, limit)
-        return [dict(row) for row in rows]
+        try:
+            rows = await conn.fetch("""
+                SELECT id, job_type, dedupe_key, status, created_at, payload, action_preview
+                FROM public.jobs
+                WHERE status = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+            """, status, limit)
+            return [dict(row) for row in rows]
+        except Exception:
+            rows = await conn.fetch("""
+                SELECT id, job_type, dedupe_key, status, created_at
+                FROM public.jobs
+                WHERE status = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+            """, status, limit)
+            return [dict(row) for row in rows]

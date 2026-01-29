@@ -64,7 +64,15 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
     job_type = determine_job_type(source, topic, codigo_situacao)
     dedupe_key = generate_dedupe_key(source, topic, venda_id, job_type)
     
-    await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=event_id, payload=payload)
+    job_payload = {
+        "source": source,
+        "topic": topic,
+        "venda_id": str(venda_id) if venda_id is not None else None,
+        "codigo_situacao": str(codigo_situacao) if codigo_situacao is not None else None,
+        "id_nota_fiscal": str(id_nota_fiscal) if id_nota_fiscal is not None else None
+    }
+    
+    await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload)
     
     return JSONResponse(content={"ok": True})
 

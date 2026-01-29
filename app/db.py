@@ -22,7 +22,8 @@ async def init_db():
             max_size=10,
             ssl=ssl_context,
             command_timeout=60,
-            timeout=30
+            timeout=30,
+            statement_cache_size=0
         )
         
         async with pool.acquire() as conn:
@@ -55,6 +56,13 @@ async def init_db():
             await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_jobs_status ON public.jobs(status)
             """)
+            
+            try:
+                await conn.execute("""
+                    ALTER TABLE public.jobs ADD COLUMN IF NOT EXISTS event_id INTEGER REFERENCES public.events(id)
+                """)
+            except Exception:
+                pass
         logger.info("Database connected and tables created")
     except Exception as e:
         logger.error(f"Failed to connect to database: {e}")
@@ -86,7 +94,7 @@ async def insert_event(
     async with p.acquire() as conn:
         row = await conn.fetchrow("""
             INSERT INTO public.events (event_key, source, topic, venda_id, codigo_situacao, id_nota_fiscal, payload)
-            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+            VALUES ($1::text, $2::text, $3::text, $4::integer, $5::integer, $6::integer, $7::jsonb)
             ON CONFLICT (event_key) DO NOTHING
             RETURNING id
         """, event_key, source, topic, venda_id, codigo_situacao, id_nota_fiscal, payload)
@@ -96,12 +104,20 @@ async def insert_event(
 async def insert_job(job_type: str, dedupe_key: str, event_id: int | None) -> bool:
     p = await get_pool()
     async with p.acquire() as conn:
-        result = await conn.execute("""
-            INSERT INTO public.jobs (job_type, dedupe_key, status, event_id)
-            VALUES ($1, $2, 'queued', $3)
-            ON CONFLICT (dedupe_key) DO NOTHING
-        """, job_type, dedupe_key, event_id)
-        return result == "INSERT 0 1"
+        try:
+            result = await conn.execute("""
+                INSERT INTO public.jobs (job_type, dedupe_key, status, event_id)
+                VALUES ($1::text, $2::text, 'queued', $3::integer)
+                ON CONFLICT (dedupe_key) DO NOTHING
+            """, job_type, dedupe_key, event_id)
+            return result == "INSERT 0 1"
+        except Exception:
+            result = await conn.execute("""
+                INSERT INTO public.jobs (job_type, dedupe_key, status)
+                VALUES ($1::text, $2::text, 'queued')
+                ON CONFLICT (dedupe_key) DO NOTHING
+            """, job_type, dedupe_key)
+            return result == "INSERT 0 1"
 
 
 async def get_events_count() -> int:

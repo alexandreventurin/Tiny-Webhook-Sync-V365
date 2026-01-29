@@ -1,6 +1,7 @@
 from pydantic import BaseModel
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from datetime import datetime
+from uuid import UUID
 
 
 class WebhookDados(BaseModel):
@@ -23,7 +24,7 @@ class HealthResponse(BaseModel):
 
 
 class JobItem(BaseModel):
-    id: int
+    id: Union[int, str, UUID]
     job_type: str
     dedupe_key: str
     status: str

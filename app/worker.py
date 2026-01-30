@@ -8,6 +8,8 @@ from app.db import (
     update_job_done,
     update_job_failed,
     upsert_orders_map,
+    upsert_orders_a_snapshot,
+    insert_job,
     reset_stale_locks
 )
 
@@ -47,16 +49,50 @@ async def process_job(job: dict) -> None:
             
             await upsert_orders_map(external_key=external_key, venda_a_id=str(venda_id))
             
+            required_fields = ["nome_cliente", "endereco", "itens"]
+            payload_fields_missing = [f for f in required_fields if f not in payload or not payload.get(f)]
+            
             action_preview = {
                 "would": "create_order_in_B",
-                "external_key": external_key,
+                "status_target": "dados_incompletos",
                 "venda_a_id": venda_id,
-                "source": source,
-                "topic": topic
+                "external_key": external_key,
+                "payload_fields_missing": payload_fields_missing,
+                "note": "dry-run: not calling Tiny B API yet"
             }
             
             await update_job_done(job_id, action_preview)
             logger.info(f"Job {job_id} completed: create_order_b for {external_key}")
+        
+        elif job_type == 'fetch_order_a':
+            if not venda_id:
+                await update_job_failed(job_id, "missing_venda_id", attempts)
+                logger.warning(f"Job {job_id} failed: missing_venda_id")
+                return
+            
+            webhook_payload_raw = payload.get('webhook_payload') or payload
+            await upsert_orders_a_snapshot(venda_a_id=str(venda_id), webhook_payload=webhook_payload_raw)
+            
+            action_preview = {
+                "would": "fetch_order_a",
+                "venda_a_id": venda_id,
+                "note": "dry-run: not calling Tiny yet"
+            }
+            
+            await update_job_done(job_id, action_preview)
+            logger.info(f"Job {job_id} completed: fetch_order_a for venda {venda_id}")
+            
+            create_order_dedupe_key = f"A:vendas:{venda_id}:create_order_b"
+            create_order_payload = {
+                "source": "A",
+                "topic": "vendas",
+                "venda_id": str(venda_id),
+                "codigo_situacao": codigo_situacao,
+                "id_nota_fiscal": id_nota_fiscal,
+                "from_fetch_order_a": True
+            }
+            await insert_job(job_type="create_order_b", dedupe_key=create_order_dedupe_key, event_id=None, payload=create_order_payload)
+            logger.info(f"Chained create_order_b job for venda {venda_id}")
         
         elif job_type == 'sync_status':
             action_preview = {

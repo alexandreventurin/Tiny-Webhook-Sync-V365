@@ -8,9 +8,13 @@ from fastapi.responses import JSONResponse
 from app.db import (
     init_db, close_db, insert_event, insert_job,
     get_events_count, get_jobs_count_by_status,
-    get_jobs_list, get_last_event_at, get_last_job_done_at
+    get_jobs_list, get_last_event_at, get_last_job_done_at,
+    get_orders_a_list, get_order_a_snapshot
 )
-from app.schemas import WebhookResponse, HealthResponse, JobsListResponse, JobItem, RunJobsResponse
+from app.schemas import (
+    WebhookResponse, HealthResponse, JobsListResponse, JobItem, RunJobsResponse,
+    OrderAItem, OrderAListResponse, OrderASnapshotResponse
+)
 from app.utils import generate_event_key, generate_dedupe_key, determine_job_type, to_int_or_none
 from app.worker import worker_loop, stop_worker, run_worker_once
 
@@ -182,8 +186,8 @@ async def health():
 
 
 @app.get("/admin/jobs", response_model=JobsListResponse)
-async def admin_jobs(status: str | None = None, limit: int = 50):
-    jobs = await get_jobs_list(status=status, limit=limit)
+async def admin_jobs(status: str | None = None, job_type: str | None = None, limit: int = 50):
+    jobs = await get_jobs_list(status=status, limit=limit, job_type=job_type)
     return JobsListResponse(
         jobs=[JobItem(**job) for job in jobs]
     )
@@ -193,3 +197,19 @@ async def admin_jobs(status: str | None = None, limit: int = 50):
 async def admin_run_jobs(limit: int = 50):
     processed = await run_worker_once(limit=limit)
     return RunJobsResponse(processed=processed)
+
+
+@app.get("/admin/orders-a", response_model=OrderAListResponse)
+async def admin_orders_a(limit: int = 50):
+    orders = await get_orders_a_list(limit=limit)
+    return OrderAListResponse(
+        orders=[OrderAItem(**order) for order in orders]
+    )
+
+
+@app.get("/admin/orders-a/{venda_a_id}", response_model=OrderASnapshotResponse)
+async def admin_order_a_detail(venda_a_id: str):
+    order = await get_order_a_snapshot(venda_a_id)
+    if not order:
+        return JSONResponse(status_code=404, content={"error": "not_found"})
+    return OrderASnapshotResponse(**order)

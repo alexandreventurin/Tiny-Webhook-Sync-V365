@@ -22,13 +22,13 @@ args = "API Server"
 name = "API Server"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "uvicorn app.main:app --host 0.0.0.0 --port 5000"
-waitForPort = 5000
-
 [workflows.workflow.metadata]
 outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "uvicorn app.main:app --host 0.0.0.0 --port 5000 --reload"
+waitForPort = 5000
 
 [[ports]]
 localPort = 5000

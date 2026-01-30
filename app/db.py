@@ -314,11 +314,19 @@ async def get_last_job_done_at() -> datetime | None:
             return None
 
 
-async def get_jobs_list(status: str | None, limit: int) -> list[dict]:
+async def get_jobs_list(status: str | None, limit: int, job_type: str | None = None) -> list[dict]:
     p = await get_pool()
     async with p.acquire() as conn:
         try:
-            if status:
+            if status and job_type:
+                rows = await conn.fetch("""
+                    SELECT id, job_type, dedupe_key, status, created_at, payload, action_preview
+                    FROM public.jobs
+                    WHERE status = $1 AND job_type = $2
+                    ORDER BY created_at DESC
+                    LIMIT $3
+                """, status, job_type, limit)
+            elif status:
                 rows = await conn.fetch("""
                     SELECT id, job_type, dedupe_key, status, created_at, payload, action_preview
                     FROM public.jobs
@@ -326,6 +334,14 @@ async def get_jobs_list(status: str | None, limit: int) -> list[dict]:
                     ORDER BY created_at DESC
                     LIMIT $2
                 """, status, limit)
+            elif job_type:
+                rows = await conn.fetch("""
+                    SELECT id, job_type, dedupe_key, status, created_at, payload, action_preview
+                    FROM public.jobs
+                    WHERE job_type = $1
+                    ORDER BY created_at DESC
+                    LIMIT $2
+                """, job_type, limit)
             else:
                 rows = await conn.fetch("""
                     SELECT id, job_type, dedupe_key, status, created_at, payload, action_preview
@@ -351,3 +367,42 @@ async def get_jobs_list(status: str | None, limit: int) -> list[dict]:
                     LIMIT $1
                 """, limit)
             return [dict(row) for row in rows]
+
+
+async def upsert_orders_a_snapshot(venda_a_id: str, webhook_payload: dict) -> None:
+    p = await get_pool()
+    payload_str = json.dumps(webhook_payload)
+    async with p.acquire() as conn:
+        try:
+            await conn.execute("""
+                INSERT INTO public.orders_a_snapshot (venda_a_id, webhook_payload, updated_at)
+                VALUES ($1::text, $2::jsonb, NOW())
+                ON CONFLICT (venda_a_id) DO UPDATE SET 
+                    webhook_payload = EXCLUDED.webhook_payload,
+                    updated_at = NOW()
+            """, venda_a_id, payload_str)
+        except Exception as e:
+            logger.error(f"Failed to upsert orders_a_snapshot: {e}")
+
+
+async def get_orders_a_list(limit: int) -> list[dict]:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT venda_a_id, needs_fetch, updated_at, created_at
+            FROM public.orders_a_snapshot
+            ORDER BY updated_at DESC
+            LIMIT $1
+        """, limit)
+        return [dict(row) for row in rows]
+
+
+async def get_order_a_snapshot(venda_a_id: str) -> dict | None:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT venda_a_id, created_at, updated_at, webhook_payload, fetched_payload, needs_fetch, notes
+            FROM public.orders_a_snapshot
+            WHERE venda_a_id = $1
+        """, venda_a_id)
+        return dict(row) if row else None

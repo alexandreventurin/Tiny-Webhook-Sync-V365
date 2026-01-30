@@ -43,3 +43,24 @@ class JobsListResponse(BaseModel):
 
 class RunJobsResponse(BaseModel):
     processed: int
+
+
+class OrderAItem(BaseModel):
+    venda_a_id: str
+    needs_fetch: bool
+    updated_at: datetime
+    created_at: datetime
+
+
+class OrderAListResponse(BaseModel):
+    orders: list[OrderAItem]
+
+
+class OrderASnapshotResponse(BaseModel):
+    venda_a_id: str
+    created_at: datetime
+    updated_at: datetime
+    webhook_payload: Optional[Any] = None
+    fetched_payload: Optional[Any] = None
+    needs_fetch: bool
+    notes: Optional[str] = None

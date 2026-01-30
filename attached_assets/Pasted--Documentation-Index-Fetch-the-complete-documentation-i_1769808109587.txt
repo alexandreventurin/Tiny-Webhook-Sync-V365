@@ -1,0 +1,54 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://api-docs.erp.olist.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Autenticação e autorização
+
+> Utilizando o padrão OAuth 2, o usuário do ERP poderá permitir acesso à conta para sua aplicação.
+
+### Solicitação de autorização
+
+Seu aplicativo solicita autorização ao usuário para acessar seus dados. Isso é feito redirecionando o usuário para uma página de login do ERP. Exemplo de URL de solicitação de autorização:
+
+```
+https://accounts.tiny.com.br/realms/tiny/protocol/openid-connect/auth?client_id=CLIENT_ID&redirect_uri=REDIRECT_URI&scope=openid&response_type=code
+```
+
+### Obtenção do código de autorização
+
+Após o usuário conceder a autorização, o ERP o redireciona de volta para seu aplicativo com um código de autorização.
+
+### Solicitação de token de acesso
+
+Seu aplicativo envia o código de autorização, juntamente com as credenciais do aplicativo, para o ERP para solicitar um token de acesso:
+
+```bash  theme={null}
+curl --location 'https://accounts.tiny.com.br/realms/tiny/protocol/openid-connect/token' \\
+--header 'Content-Type: application/x-www-form-urlencoded' \\
+--data-urlencode 'grant_type=authorization_code' \\
+--data-urlencode 'client_id=CLIENT_ID' \\
+--data-urlencode 'client_secret=CLIENT_SECRET' \\
+--data-urlencode 'redirect_uri=REDIRECT_URI' \\
+--data-urlencode 'code=AUTHORIZATION_CODE'
+```
+
+### Utilização do token de acesso
+
+Finalmente, seu aplicativo pode usar o token de acesso para fazer solicitações à API em nome do usuário:
+
+```
+Authorization: Bearer {access_token}
+```
+
+### Solicitação do refresh token
+
+Considere que o token de acesso gerado expirará após 4 horas. Depois disso será necessária a renovação do token, utilizando o refresh token adquirido no passo anterior. O refresh token tem duração de 1 dia.
+
+```bash  theme={null}
+curl --location 'https://accounts.tiny.com.br/realms/tiny/protocol/openid-connect/token' \\
+--header 'Content-Type: application/x-www-form-urlencoded' \\
+--data-urlencode 'grant_type=refresh_token' \\
+--data-urlencode 'client_id=CLIENT_ID' \\
+--data-urlencode 'client_secret=CLIENT_SECRET' \\
+--data-urlencode 'refresh_token=REFRESH_TOKEN'
+```

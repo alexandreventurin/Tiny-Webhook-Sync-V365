@@ -116,6 +116,31 @@ async def init_db():
                 await conn.execute("ALTER TABLE public.jobs ADD COLUMN IF NOT EXISTS action_preview JSONB")
             except Exception:
                 pass
+            
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS public.orders_a_snapshot (
+                    id SERIAL PRIMARY KEY,
+                    venda_a_id TEXT UNIQUE NOT NULL,
+                    webhook_payload JSONB,
+                    fetched_payload JSONB,
+                    fetched_at TIMESTAMPTZ,
+                    needs_fetch BOOLEAN DEFAULT true,
+                    last_error JSONB,
+                    notes TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            
+            try:
+                await conn.execute("ALTER TABLE public.orders_a_snapshot ADD COLUMN IF NOT EXISTS last_error JSONB")
+            except Exception:
+                pass
+            
+            try:
+                await conn.execute("ALTER TABLE public.orders_a_snapshot ADD COLUMN IF NOT EXISTS needs_fetch BOOLEAN DEFAULT true")
+            except Exception:
+                pass
                 
         logger.info("Database connected and tables created")
     except Exception as e:

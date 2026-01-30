@@ -5,7 +5,7 @@ import logging
 from typing import Optional
 from datetime import datetime
 
-from app.settings import settings
+from app.settings import DATABASE_URL
 
 pool: Optional[asyncpg.Pool] = None
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ async def init_db():
     
     try:
         pool = await asyncpg.create_pool(
-            settings.database_url,
+            DATABASE_URL,
             min_size=1,
             max_size=10,
             ssl=ssl_context,
@@ -37,9 +37,9 @@ async def init_db():
                     event_key TEXT UNIQUE NOT NULL,
                     source TEXT NOT NULL,
                     topic TEXT NOT NULL,
-                    venda_id INTEGER,
-                    codigo_situacao INTEGER,
-                    id_nota_fiscal INTEGER,
+                    venda_id TEXT,
+                    codigo_situacao TEXT,
+                    id_nota_fiscal TEXT,
                     payload JSONB NOT NULL,
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
@@ -403,3 +403,51 @@ async def get_order_a_snapshot(venda_a_id: str) -> dict | None:
             WHERE venda_a_id = $1
         """, venda_a_id)
         return dict(row) if row else None
+
+
+async def get_snapshot_fetched_at(venda_a_id: str) -> datetime | None:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT fetched_at FROM public.orders_a_snapshot WHERE venda_a_id = $1
+        """, venda_a_id)
+        return row['fetched_at'] if row and row['fetched_at'] else None
+
+
+async def upsert_orders_a_fetched(venda_a_id: str, fetched_payload: dict) -> None:
+    p = await get_pool()
+    payload_str = json.dumps(fetched_payload)
+    async with p.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO public.orders_a_snapshot (venda_a_id, fetched_payload, fetched_at, needs_fetch, updated_at)
+            VALUES ($1::text, $2::jsonb, NOW(), false, NOW())
+            ON CONFLICT (venda_a_id) DO UPDATE SET 
+                fetched_payload = EXCLUDED.fetched_payload,
+                fetched_at = NOW(),
+                needs_fetch = false,
+                updated_at = NOW()
+        """, venda_a_id, payload_str)
+
+
+async def upsert_orders_map_with_b(external_key: str, venda_a_id: str, venda_b_id: str | None) -> None:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO public.orders_map (external_key, venda_a_id, venda_b_id, updated_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT (external_key) DO UPDATE SET 
+                venda_b_id = EXCLUDED.venda_b_id,
+                updated_at = NOW()
+        """, external_key, venda_a_id, venda_b_id)
+
+
+async def get_orders_map_list(limit: int) -> list[dict]:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT external_key, venda_a_id, venda_b_id, order_id, created_at, updated_at
+            FROM public.orders_map
+            ORDER BY updated_at DESC
+            LIMIT $1
+        """, limit)
+        return [dict(row) for row in rows]

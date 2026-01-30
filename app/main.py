@@ -9,13 +9,13 @@ from fastapi.responses import JSONResponse
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 
-APP_BUILD = "2026-01-30-001"
+APP_BUILD = "2026-01-30-002"
 
 from app.db import (
     init_db, close_db, insert_event, insert_job,
     get_events_count, get_jobs_count_by_status,
     get_jobs_list, get_last_event_at, get_last_job_done_at,
-    get_orders_a_list, get_order_a_snapshot
+    get_orders_a_list, get_order_a_snapshot, get_orders_map_list
 )
 from app.schemas import (
     WebhookResponse, HealthResponse, JobsListResponse, JobItem, RunJobsResponse,
@@ -236,3 +236,9 @@ async def admin_runtime():
         "app_build": APP_BUILD,
         "worker_build": WORKER_BUILD
     }
+
+
+@app.get("/admin/orders-map")
+async def admin_orders_map(limit: int = 50):
+    orders = await get_orders_map_list(limit=limit)
+    return {"orders": orders}

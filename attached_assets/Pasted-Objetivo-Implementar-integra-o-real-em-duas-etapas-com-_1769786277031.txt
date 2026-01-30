@@ -1,0 +1,99 @@
+Objetivo: Implementar integração real em duas etapas, com segurança:
+1) Usar token do Tiny A (Rejuderme) SOMENTE PARA GET para buscar detalhes completos do pedido.
+2) Usar token do Tiny B (Muy Bela) para criar o pedido em B em "Dados Incompletos" (situacao=8).
+
+Regras de segurança:
+- NUNCA logar tokens.
+- Feature flags:
+  - ENABLE_FETCH_A=true/false (default true)
+  - EXECUTE_TINY_B=true/false (default false)
+- Allowlist opcional:
+  - ALLOW_VENDA_IDS (ex: "30012,30013") -> se setado, só executa para esses IDs.
+- Rate limit básico: não fazer mais de 1 GET por venda_id por X minutos (cache no DB).
+- Se faltar dado essencial (endereço/itens), NÃO criar em B. Marcar job como failed com reason="missing_required_fields".
+
+Implementação:
+
+1) app/settings.py
+Adicionar:
+TINY_API_BASE = os.getenv("TINY_API_BASE", "https://erp.tiny.com.br/public-api/v3")
+TINY_A_TOKEN = os.getenv("TINY_A_TOKEN")
+TINY_B_TOKEN = os.getenv("TINY_B_TOKEN")
+ENABLE_FETCH_A = os.getenv("ENABLE_FETCH_A", "true").lower() == "true"
+EXECUTE_TINY_B = os.getenv("EXECUTE_TINY_B", "false").lower() == "true"
+ALLOW_VENDA_IDS = set([x.strip() for x in os.getenv("ALLOW_VENDA_IDS","").split(",") if x.strip()])
+
+2) app/tiny_client.py (novo)
+Criar cliente async com httpx:
+- class TinyClient(token: str)
+- headers: Authorization: Bearer <token>
+Funções:
+- get_order_details_a(venda_id: str) -> dict
+  - Implementar chamando o endpoint correto no swagger.json para obter detalhes do Pedido/Venda.
+  - Salvar resposta crua (json) no snapshot.
+- create_order_b(order_payload: dict) -> dict
+  - Implementar chamando o endpoint CriarPedidoAction do swagger.json.
+  - Retornar pelo menos o id do pedido criado em B (venda_b_id).
+
+Obs: O agent deve abrir e ler o swagger.json localmente (ou baixar via URL informada) para pegar:
+- path/method do GET de detalhes do pedido
+- path/method do POST de criação de pedido
+e mapear os campos mínimos.
+
+3) Banco (migrations SQL)
+Criar tabela:
+orders_a_snapshot (
+  venda_a_id text primary key,
+  fetched_at timestamptz not null default now(),
+  payload jsonb not null
+)
+
+Opcional (para cache/controle):
+orders_a_snapshot.fetched_at usado para evitar refetch em janela curta (ex: 10 min).
+
+4) app/db.py
+Adicionar funções:
+- upsert_orders_a_snapshot(venda_a_id: str, payload: dict)
+- get_orders_a_snapshot(venda_a_id: str) -> dict|None
+- upsert_orders_map_external(external_key: str, venda_a_id: str, venda_b_id: str|None)
+
+5) app/worker.py
+No fluxo:
+A/vendas aprovado -> criar job fetch_order_a (já existe ou implementar)
+Handler fetch_order_a:
+- se ENABLE_FETCH_A=false: marcar done com note="skipped fetch"
+- se ALLOW_VENDA_IDS setado e venda_id não está na lista: marcar done "skipped allowlist"
+- chamar tiny_client_A.get_order_details_a(venda_id)
+- salvar em orders_a_snapshot
+- enfileirar create_order_b (dedupe por venda_id)
+
+Handler create_order_b:
+- se EXECUTE_TINY_B=false: dry-run, action_preview deve mostrar:
+  - situacao_target=8
+  - quais campos essenciais existem / faltam (payload_fields_missing)
+- se EXECUTE_TINY_B=true:
+  - carregar snapshot A (get_orders_a_snapshot)
+  - montar payload de criação em B com situacao=8 (Dados Incompletos)
+  - chamar tiny_client_B.create_order_b(...)
+  - salvar venda_b_id em orders_map (external_key="A:<venda_id>")
+  - marcar done com action_preview incluindo venda_b_id e situacao=8
+
+6) Admin endpoints (para operar com clareza)
+- GET /admin/runtime já existe
+Adicionar:
+- GET /admin/snapshots?venda_id=... (retorna snapshot salvo)
+- GET /admin/orders-map?limit=50 (retorna mapeamentos)
+- POST /admin/jobs/run?limit=50 já existe (lembrar: é POST)
+
+7) Testes rápidos
+- Enviar webhook A aprovado com venda_id=30012
+- Verificar:
+  - jobs: fetch_order_a done
+  - orders_a_snapshot: existe para venda_id
+  - create_order_b: done (dry-run inicialmente)
+Depois, quando Muy Bela autorizar:
+- setar EXECUTE_TINY_B=true e ALLOW_VENDA_IDS=30012
+- reenviar webhook e confirmar criação real em B com situacao=8
+
+IMPORTANTE:
+- Se o GET de detalhes do pedido não estiver claro, o agent deve pausar e listar os endpoints candidatos encontrados no swagger.json (com path/method) e escolher o mais provável.

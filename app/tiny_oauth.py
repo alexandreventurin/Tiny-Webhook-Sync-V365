@@ -12,7 +12,7 @@ from app.settings import (
 
 logger = logging.getLogger(__name__)
 
-SCOPES = "openid offline_access"
+SCOPES = "openid"
 
 
 def get_credentials(account: str) -> tuple[str, str]:

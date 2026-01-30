@@ -373,16 +373,13 @@ async def upsert_orders_a_snapshot(venda_a_id: str, webhook_payload: dict) -> No
     p = await get_pool()
     payload_str = json.dumps(webhook_payload)
     async with p.acquire() as conn:
-        try:
-            await conn.execute("""
-                INSERT INTO public.orders_a_snapshot (venda_a_id, webhook_payload, updated_at)
-                VALUES ($1::text, $2::jsonb, NOW())
-                ON CONFLICT (venda_a_id) DO UPDATE SET 
-                    webhook_payload = EXCLUDED.webhook_payload,
-                    updated_at = NOW()
-            """, venda_a_id, payload_str)
-        except Exception as e:
-            logger.error(f"Failed to upsert orders_a_snapshot: {e}")
+        await conn.execute("""
+            INSERT INTO public.orders_a_snapshot (venda_a_id, webhook_payload, updated_at)
+            VALUES ($1::text, $2::jsonb, NOW())
+            ON CONFLICT (venda_a_id) DO UPDATE SET 
+                webhook_payload = EXCLUDED.webhook_payload,
+                updated_at = NOW()
+        """, venda_a_id, payload_str)
 
 
 async def get_orders_a_list(limit: int) -> list[dict]:

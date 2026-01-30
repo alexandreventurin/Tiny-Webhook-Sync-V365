@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import sys
 from typing import Any
 
 from app.db import (
@@ -13,7 +14,10 @@ from app.db import (
     reset_stale_locks
 )
 
+logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
+
+WORKER_BUILD = "2026-01-30-001"
 
 worker_running = False
 

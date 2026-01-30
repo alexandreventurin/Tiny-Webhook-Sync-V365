@@ -1,9 +1,15 @@
 import json
 import asyncio
+import logging
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+
+logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+
+APP_BUILD = "2026-01-30-001"
 
 from app.db import (
     init_db, close_db, insert_event, insert_job,
@@ -16,7 +22,7 @@ from app.schemas import (
     OrderAItem, OrderAListResponse, OrderASnapshotResponse
 )
 from app.utils import generate_event_key, generate_dedupe_key, determine_job_type, to_int_or_none
-from app.worker import worker_loop, stop_worker, run_worker_once
+from app.worker import worker_loop, stop_worker, run_worker_once, WORKER_BUILD
 
 
 @asynccontextmanager
@@ -213,3 +219,11 @@ async def admin_order_a_detail(venda_a_id: str):
     if not order:
         return JSONResponse(status_code=404, content={"error": "not_found"})
     return OrderASnapshotResponse(**order)
+
+
+@app.get("/admin/runtime")
+async def admin_runtime():
+    return {
+        "app_build": APP_BUILD,
+        "worker_build": WORKER_BUILD
+    }

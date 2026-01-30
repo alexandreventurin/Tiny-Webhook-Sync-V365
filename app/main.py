@@ -22,7 +22,7 @@ from app.schemas import (
     OrderAItem, OrderAListResponse, OrderASnapshotResponse
 )
 from app.utils import generate_event_key, generate_dedupe_key, determine_job_type, to_int_or_none
-from app.worker import worker_loop, stop_worker, run_worker_once, WORKER_BUILD
+from app.worker import worker_loop, stop_worker, run_worker_once, run_worker_once_detailed, WORKER_BUILD
 
 
 @asynccontextmanager
@@ -203,6 +203,12 @@ async def admin_jobs(status: str | None = None, job_type: str | None = None, lim
 async def admin_run_jobs(limit: int = 50):
     processed = await run_worker_once(limit=limit)
     return RunJobsResponse(processed=processed)
+
+
+@app.post("/admin/worker/run_once")
+async def admin_worker_run_once(limit: int = 50):
+    result = await run_worker_once_detailed(limit=limit)
+    return result
 
 
 @app.get("/admin/orders-a", response_model=OrderAListResponse)

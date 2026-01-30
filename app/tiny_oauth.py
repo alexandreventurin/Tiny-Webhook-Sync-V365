@@ -27,8 +27,10 @@ def get_redirect_uri(account: str) -> str:
     return f"{base}/auth/{account.lower()}/callback"
 
 
-def build_auth_url(account: str) -> str:
+def build_auth_url(account: str) -> str | None:
     client_id, _ = get_credentials(account)
+    if not client_id:
+        return None
     redirect_uri = get_redirect_uri(account)
     return (
         f"{TINY_AUTH_BASE}/realms/tiny/protocol/openid-connect/auth"

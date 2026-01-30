@@ -294,6 +294,8 @@ async def auth_a_start():
     from fastapi.responses import RedirectResponse
     from app.tiny_oauth import build_auth_url
     url = build_auth_url("A")
+    if not url:
+        return {"error": "TINY_A_CLIENT_ID not configured"}
     return RedirectResponse(url=url, status_code=302)
 
 
@@ -302,12 +304,17 @@ async def auth_b_start():
     from fastapi.responses import RedirectResponse
     from app.tiny_oauth import build_auth_url
     url = build_auth_url("B")
+    if not url:
+        return {"error": "TINY_B_CLIENT_ID not configured"}
     return RedirectResponse(url=url, status_code=302)
 
 
 @app.get("/auth/a/callback")
-async def auth_a_callback(code: str | None = None):
+async def auth_a_callback(code: str | None = None, error: str | None = None, error_description: str | None = None):
     from app.tiny_oauth import exchange_code_for_tokens, save_tokens_to_db
+    
+    if error:
+        return {"error": error, "description": error_description}
     
     if not code:
         return {"error": "missing code parameter"}
@@ -328,8 +335,11 @@ async def auth_a_callback(code: str | None = None):
 
 
 @app.get("/auth/b/callback")
-async def auth_b_callback(code: str | None = None):
+async def auth_b_callback(code: str | None = None, error: str | None = None, error_description: str | None = None):
     from app.tiny_oauth import exchange_code_for_tokens, save_tokens_to_db
+    
+    if error:
+        return {"error": error, "description": error_description}
     
     if not code:
         return {"error": "missing code parameter"}

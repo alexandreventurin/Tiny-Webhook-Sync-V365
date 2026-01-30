@@ -54,7 +54,7 @@ async def exchange_code_for_tokens(account: str, code: str) -> dict:
         "code": code
     }
     
-    logger.info(f"Token exchange for {account}: client_id={client_id[:20]}..., redirect_uri={redirect_uri}")
+    logger.info(f"Token exchange for {account}: client_id={client_id[:30]}..., secret_len={len(client_secret)}, redirect_uri={redirect_uri}")
     
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(url, data=data)

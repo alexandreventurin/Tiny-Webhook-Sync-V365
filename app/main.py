@@ -52,12 +52,15 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
     
     dados = payload.get("dados") or {}
     venda_id_raw = dados.get("id")
-    codigo_situacao_raw = dados.get("codigoSituacao") or dados.get("codigo_situacao")
+    codigo_situacao_raw = (
+        dados.get("codigoSituacao") or dados.get("codigo_situacao") or 
+        payload.get("codigoSituacao") or payload.get("codigo_situacao")
+    )
     id_nota_fiscal_raw = dados.get("idNotaFiscal") or dados.get("id_nota_fiscal")
     
     venda_id_int = to_int_or_none(venda_id_raw)
     id_nota_fiscal_int = to_int_or_none(id_nota_fiscal_raw)
-    codigo_situacao_str = str(codigo_situacao_raw).strip() if codigo_situacao_raw is not None else None
+    codigo_situacao_str = str(codigo_situacao_raw).strip().lower() if codigo_situacao_raw not in (None, "") else None
     id_nota_fiscal_str = str(id_nota_fiscal_int) if id_nota_fiscal_int is not None else None
     
     payload_str = json.dumps(payload, sort_keys=True, ensure_ascii=False)
@@ -84,7 +87,7 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
     if source == "B" and topic == "notas" and venda_id_int is None and id_nota_fiscal_int is None:
         return JSONResponse(content={"ok": True, "status": "ignored", "reason": "missing_venda_id_and_id_nota_fiscal"})
     
-    job_type = determine_job_type(source, topic, codigo_situacao_raw)
+    job_type = determine_job_type(source, topic, codigo_situacao_str)
     dedupe_key = generate_dedupe_key(source, topic, venda_id_int, job_type)
     
     job_payload = {

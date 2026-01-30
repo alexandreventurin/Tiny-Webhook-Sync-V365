@@ -126,6 +126,7 @@ async def process_job(job: dict) -> None:
         elif job_type == 'noop':
             action_preview = {
                 "would": "noop",
+                "received_status": codigo_situacao,
                 "source": source,
                 "topic": topic
             }

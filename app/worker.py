@@ -12,6 +12,7 @@ from app.db import (
     upsert_orders_map,
     upsert_orders_a_snapshot,
     upsert_orders_a_fetched,
+    upsert_orders_a_fetch_error,
     upsert_orders_map_with_b,
     get_order_a_snapshot,
     get_snapshot_fetched_at,
@@ -23,7 +24,7 @@ from app.settings import (
     ENABLE_FETCH_A, EXECUTE_TINY_B, 
     ALLOW_VENDA_IDS, FETCH_CACHE_MINUTES
 )
-from app.tiny_client import TinyClient
+from app.tiny_client import TinyClient, TinyApiError
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -202,17 +203,22 @@ async def process_job(job: dict) -> None:
                 return
             
             client_a = TinyClient(TINY_A_TOKEN)
-            fetched_data = await client_a.get_order_details(str(venda_id))
-            await upsert_orders_a_fetched(venda_a_id=str(venda_id), fetched_payload=fetched_data)
-            
-            action_preview = {
-                "would": "fetch_order_a",
-                "venda_a_id": venda_id,
-                "fetched": True,
-                "note": "fetched from Tiny A"
-            }
-            await update_job_done(job_id, action_preview)
-            logger.info(f"Job {job_id} completed: fetch_order_a for venda {venda_id}")
+            try:
+                fetched_data = await client_a.get_order_details(str(venda_id))
+                await upsert_orders_a_fetched(venda_a_id=str(venda_id), fetched_payload=fetched_data)
+                
+                action_preview = {
+                    "would": "fetch_order_a",
+                    "venda_a_id": venda_id,
+                    "fetched": True,
+                    "note": "fetched from Tiny A"
+                }
+                await update_job_done(job_id, action_preview)
+                logger.info(f"Job {job_id} completed: fetch_order_a for venda {venda_id}")
+            except TinyApiError as e:
+                await upsert_orders_a_fetch_error(venda_a_id=str(venda_id), status_code=e.status_code, error_body=e.body)
+                logger.error(f"Job {job_id} fetch_order_a failed: {e.status_code} {e.body[:100]}")
+                raise
             
             create_order_dedupe_key = f"A:vendas:{venda_id}:create_order_b"
             create_order_payload = {

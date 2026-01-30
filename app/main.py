@@ -242,3 +242,39 @@ async def admin_runtime():
 async def admin_orders_map(limit: int = 50):
     orders = await get_orders_map_list(limit=limit)
     return {"orders": orders}
+
+
+@app.get("/admin/tiny_a/ping")
+async def admin_tiny_a_ping(venda_id: str):
+    from app.settings import TINY_A_TOKEN
+    from app.tiny_client import TinyClient
+    
+    if not TINY_A_TOKEN:
+        return {"ok": False, "error": "TINY_A_TOKEN not configured"}
+    
+    client = TinyClient(TINY_A_TOKEN)
+    result = await client.ping_order(venda_id)
+    return {
+        "ok": result.ok,
+        "status_code": result.status_code,
+        "excerpt": result.excerpt,
+        "error": result.error
+    }
+
+
+@app.get("/admin/tiny_b/ping")
+async def admin_tiny_b_ping(venda_id: str):
+    from app.settings import TINY_B_TOKEN
+    from app.tiny_client import TinyClient
+    
+    if not TINY_B_TOKEN:
+        return {"ok": False, "error": "TINY_B_TOKEN not configured"}
+    
+    client = TinyClient(TINY_B_TOKEN)
+    result = await client.ping_order(venda_id)
+    return {
+        "ok": result.ok,
+        "status_code": result.status_code,
+        "excerpt": result.excerpt,
+        "error": result.error
+    }

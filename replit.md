@@ -53,11 +53,15 @@ app/
 - `GET /admin/orders-a/{venda_a_id}` - Get specific order snapshot
 - `GET /admin/orders-map?limit=50` - List order mappings (A -> B)
 
+### Auth Diagnosis
+- `GET /admin/tiny_a/ping?venda_id=XXXXX` - Test Tiny A auth (GET /pedidos/{id})
+- `GET /admin/tiny_b/ping?venda_id=XXXXX` - Test Tiny B auth (GET /pedidos/{id})
+
 ## Database Tables
 - `public.events` - Stores all webhook events with deduplication
 - `public.jobs` - Job queue for processing (includes payload, action_preview)
 - `public.orders_map` - Maps external keys to order IDs (venda_a_id -> venda_b_id)
-- `public.orders_a_snapshot` - Stores webhook and fetched payloads from Tiny A
+- `public.orders_a_snapshot` - Stores webhook and fetched payloads from Tiny A (includes last_error, needs_fetch)
 
 ## Job Flow
 

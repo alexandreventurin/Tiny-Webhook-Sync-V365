@@ -419,14 +419,29 @@ async def upsert_orders_a_fetched(venda_a_id: str, fetched_payload: dict) -> Non
     payload_str = json.dumps(fetched_payload)
     async with p.acquire() as conn:
         await conn.execute("""
-            INSERT INTO public.orders_a_snapshot (venda_a_id, fetched_payload, fetched_at, needs_fetch, updated_at)
-            VALUES ($1::text, $2::jsonb, NOW(), false, NOW())
+            INSERT INTO public.orders_a_snapshot (venda_a_id, fetched_payload, fetched_at, needs_fetch, last_error, updated_at)
+            VALUES ($1::text, $2::jsonb, NOW(), false, NULL, NOW())
             ON CONFLICT (venda_a_id) DO UPDATE SET 
                 fetched_payload = EXCLUDED.fetched_payload,
                 fetched_at = NOW(),
                 needs_fetch = false,
+                last_error = NULL,
                 updated_at = NOW()
         """, venda_a_id, payload_str)
+
+
+async def upsert_orders_a_fetch_error(venda_a_id: str, status_code: int, error_body: str) -> None:
+    p = await get_pool()
+    last_error = json.dumps({"status_code": status_code, "body": error_body[:500], "at": datetime.utcnow().isoformat()})
+    async with p.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO public.orders_a_snapshot (venda_a_id, needs_fetch, last_error, updated_at)
+            VALUES ($1::text, true, $2::jsonb, NOW())
+            ON CONFLICT (venda_a_id) DO UPDATE SET 
+                needs_fetch = true,
+                last_error = $2::jsonb,
+                updated_at = NOW()
+        """, venda_a_id, last_error)
 
 
 async def upsert_orders_map_with_b(external_key: str, venda_a_id: str, venda_b_id: str | None) -> None:

@@ -23,10 +23,14 @@ app/
 ### Required
 - `DATABASE_URL`: PostgreSQL connection string (Supabase Transaction Pooler)
 
-### Tiny API Integration
-- `TINY_A_TOKEN`: Bearer token for Tiny A (GET only)
-- `TINY_B_TOKEN`: Bearer token for Tiny B (POST create order)
+### Tiny API Integration (OAuth V3)
+- `TINY_A_CLIENT_ID`: OAuth client ID for Tiny A
+- `TINY_A_CLIENT_SECRET`: OAuth client secret for Tiny A
+- `TINY_B_CLIENT_ID`: OAuth client ID for Tiny B
+- `TINY_B_CLIENT_SECRET`: OAuth client secret for Tiny B
+- `APP_BASE_URL`: Public URL for OAuth callbacks (e.g., https://your-app.replit.app)
 - `TINY_API_BASE`: API base URL (default: https://api.tiny.com.br/public-api/v3)
+- `TINY_AUTH_BASE`: Auth server URL (default: https://accounts.tiny.com.br)
 
 ### Feature Flags
 - `ENABLE_FETCH_A`: Enable fetching from Tiny A (default: true)
@@ -56,12 +60,20 @@ app/
 ### Auth Diagnosis
 - `GET /admin/tiny_a/ping?venda_id=XXXXX` - Test Tiny A auth (GET /pedidos/{id})
 - `GET /admin/tiny_b/ping?venda_id=XXXXX` - Test Tiny B auth (GET /pedidos/{id})
+- `GET /admin/tokens` - List OAuth token status (A/B) without exposing secrets
+
+### OAuth Endpoints
+- `GET /auth/a/start` - Start OAuth flow for Tiny A (redirect to Tiny)
+- `GET /auth/a/callback` - Callback from Tiny A OAuth, saves tokens
+- `GET /auth/b/start` - Start OAuth flow for Tiny B
+- `GET /auth/b/callback` - Callback from Tiny B OAuth
 
 ## Database Tables
 - `public.events` - Stores all webhook events with deduplication
 - `public.jobs` - Job queue for processing (includes payload, action_preview)
 - `public.orders_map` - Maps external keys to order IDs (venda_a_id -> venda_b_id)
 - `public.orders_a_snapshot` - Stores webhook and fetched payloads from Tiny A (includes last_error, needs_fetch)
+- `public.tiny_tokens` - OAuth tokens for accounts A/B (access_token, refresh_token, expires_at)
 
 ## Job Flow
 

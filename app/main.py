@@ -246,13 +246,14 @@ async def admin_orders_map(limit: int = 50):
 
 @app.get("/admin/tiny_a/ping")
 async def admin_tiny_a_ping(venda_id: str):
-    from app.settings import TINY_A_TOKEN
+    from app.tiny_oauth import ensure_access_token
     from app.tiny_client import TinyClient
     
-    if not TINY_A_TOKEN:
-        return {"ok": False, "error": "TINY_A_TOKEN not configured"}
+    token = await ensure_access_token("A")
+    if not token:
+        return {"ok": False, "error": "No valid token for account A"}
     
-    client = TinyClient(TINY_A_TOKEN)
+    client = TinyClient(token)
     result = await client.ping_order(venda_id)
     return {
         "ok": result.ok,
@@ -264,13 +265,14 @@ async def admin_tiny_a_ping(venda_id: str):
 
 @app.get("/admin/tiny_b/ping")
 async def admin_tiny_b_ping(venda_id: str):
-    from app.settings import TINY_B_TOKEN
+    from app.tiny_oauth import ensure_access_token
     from app.tiny_client import TinyClient
     
-    if not TINY_B_TOKEN:
-        return {"ok": False, "error": "TINY_B_TOKEN not configured"}
+    token = await ensure_access_token("B")
+    if not token:
+        return {"ok": False, "error": "No valid token for account B"}
     
-    client = TinyClient(TINY_B_TOKEN)
+    client = TinyClient(token)
     result = await client.ping_order(venda_id)
     return {
         "ok": result.ok,
@@ -278,3 +280,70 @@ async def admin_tiny_b_ping(venda_id: str):
         "excerpt": result.excerpt,
         "error": result.error
     }
+
+
+@app.get("/admin/tokens")
+async def admin_tokens():
+    from app.tiny_oauth import list_token_status
+    tokens = await list_token_status()
+    return {"tokens": tokens}
+
+
+@app.get("/auth/a/start")
+async def auth_a_start():
+    from fastapi.responses import RedirectResponse
+    from app.tiny_oauth import build_auth_url
+    url = build_auth_url("A")
+    return RedirectResponse(url=url, status_code=302)
+
+
+@app.get("/auth/b/start")
+async def auth_b_start():
+    from fastapi.responses import RedirectResponse
+    from app.tiny_oauth import build_auth_url
+    url = build_auth_url("B")
+    return RedirectResponse(url=url, status_code=302)
+
+
+@app.get("/auth/a/callback")
+async def auth_a_callback(code: str | None = None):
+    from app.tiny_oauth import exchange_code_for_tokens, save_tokens_to_db
+    
+    if not code:
+        return {"error": "missing code parameter"}
+    
+    try:
+        tokens = await exchange_code_for_tokens("A", code)
+        access_token = tokens.get("access_token")
+        refresh_token = tokens.get("refresh_token")
+        expires_in = tokens.get("expires_in", 3600)
+        
+        if not access_token or not refresh_token:
+            return {"error": "missing tokens in response", "raw": tokens}
+        
+        await save_tokens_to_db("A", access_token, refresh_token, expires_in)
+        return {"ok": True, "account": "A", "expires_in": expires_in}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/auth/b/callback")
+async def auth_b_callback(code: str | None = None):
+    from app.tiny_oauth import exchange_code_for_tokens, save_tokens_to_db
+    
+    if not code:
+        return {"error": "missing code parameter"}
+    
+    try:
+        tokens = await exchange_code_for_tokens("B", code)
+        access_token = tokens.get("access_token")
+        refresh_token = tokens.get("refresh_token")
+        expires_in = tokens.get("expires_in", 3600)
+        
+        if not access_token or not refresh_token:
+            return {"error": "missing tokens in response", "raw": tokens}
+        
+        await save_tokens_to_db("B", access_token, refresh_token, expires_in)
+        return {"ok": True, "account": "B", "expires_in": expires_in}
+    except Exception as e:
+        return {"error": str(e)}

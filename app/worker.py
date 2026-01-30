@@ -25,6 +25,7 @@ from app.settings import (
     ALLOW_VENDA_IDS, FETCH_CACHE_MINUTES
 )
 from app.tiny_client import TinyClient, TinyApiError
+from app.tiny_oauth import ensure_access_token
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -102,9 +103,10 @@ async def process_job(job: dict) -> None:
                 logger.warning(f"Job {job_id} failed: missing required fields {missing_fields}")
                 return
             
-            if not TINY_B_TOKEN:
-                await update_job_failed(job_id, "TINY_B_TOKEN not configured", attempts)
-                logger.warning(f"Job {job_id} failed: TINY_B_TOKEN not set")
+            token_b = await ensure_access_token("B")
+            if not token_b:
+                await update_job_failed(job_id, "No valid OAuth token for account B", attempts)
+                logger.warning(f"Job {job_id} failed: No OAuth token for B")
                 return
             
             order_payload_b = {
@@ -115,7 +117,7 @@ async def process_job(job: dict) -> None:
                 "observacoes": f"Importado de A:{venda_id}"
             }
             
-            client_b = TinyClient(TINY_B_TOKEN)
+            client_b = TinyClient(token_b)
             result = await client_b.create_order(order_payload_b)
             venda_b_id = str(result.get('id') or result.get('idPedido') or '')
             
@@ -184,15 +186,16 @@ async def process_job(job: dict) -> None:
                     await insert_job(job_type="create_order_b", dedupe_key=create_order_dedupe_key, event_id=None, payload=create_order_payload)
                     return
             
-            if not TINY_A_TOKEN:
+            token_a = await ensure_access_token("A")
+            if not token_a:
                 action_preview = {
                     "would": "fetch_order_a",
                     "venda_a_id": venda_id,
                     "skipped": True,
-                    "reason": "TINY_A_TOKEN not configured"
+                    "reason": "No valid OAuth token for account A"
                 }
                 await update_job_done(job_id, action_preview)
-                logger.warning(f"Job {job_id} skipped: TINY_A_TOKEN not set")
+                logger.warning(f"Job {job_id} skipped: No OAuth token for A")
                 create_order_dedupe_key = f"A:vendas:{venda_id}:create_order_b"
                 create_order_payload = {
                     "source": "A", "topic": "vendas", "venda_id": str(venda_id),
@@ -202,7 +205,7 @@ async def process_job(job: dict) -> None:
                 await insert_job(job_type="create_order_b", dedupe_key=create_order_dedupe_key, event_id=None, payload=create_order_payload)
                 return
             
-            client_a = TinyClient(TINY_A_TOKEN)
+            client_a = TinyClient(token_a)
             try:
                 fetched_data = await client_a.get_order_details(str(venda_id))
                 await upsert_orders_a_fetched(venda_a_id=str(venda_id), fetched_payload=fetched_data)

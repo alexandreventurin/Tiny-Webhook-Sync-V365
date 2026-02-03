@@ -247,7 +247,6 @@ async def admin_orders_map(limit: int = 50):
 @app.get("/admin/tiny_a/ping")
 async def admin_tiny_a_ping(venda_id: str):
     from app.tiny_oauth import ensure_access_token
-    from app.tiny_client import TinyClient
     import httpx
     
     token = await ensure_access_token("A")
@@ -265,6 +264,29 @@ async def admin_tiny_a_ping(venda_id: str):
             "status_code": response.status_code,
             "url": url,
             "token_preview": token[:50] + "..." if token else None,
+            "response_body": response.text[:500] if response.text else None
+        }
+
+
+@app.get("/admin/tiny_a/test_contatos")
+async def admin_tiny_a_test_contatos():
+    from app.tiny_oauth import ensure_access_token
+    import httpx
+    
+    token = await ensure_access_token("A")
+    if not token:
+        return {"ok": False, "error": "No valid token for account A"}
+    
+    url = "https://api.tiny.com.br/public-api/v3/contatos?limite=1"
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    async with httpx.AsyncClient(timeout=30.0) as http_client:
+        response = await http_client.get(url, headers=headers)
+        
+        return {
+            "ok": response.status_code == 200,
+            "status_code": response.status_code,
+            "url": url,
             "response_body": response.text[:500] if response.text else None
         }
 

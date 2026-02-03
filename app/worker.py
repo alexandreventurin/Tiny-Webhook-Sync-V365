@@ -71,15 +71,17 @@ async def process_job(job: dict) -> None:
             
             order_data = fetched_payload or {}
             cliente = order_data.get('cliente') or {}
-            endereco = order_data.get('endereco') or cliente.get('endereco') or {}
-            itens = order_data.get('itens') or []
+            endereco = order_data.get('enderecoEntrega') or order_data.get('endereco') or cliente.get('endereco') or {}
+            itens_a = order_data.get('itens') or []
+            
+            cpf_cnpj = cliente.get('cpfCnpj') or cliente.get('cpf_cnpj') or ''
             
             missing_fields = []
             if not cliente.get('nome'):
                 missing_fields.append('cliente.nome')
-            if not endereco.get('endereco') and not endereco.get('logradouro'):
-                missing_fields.append('endereco')
-            if not itens:
+            if not cpf_cnpj:
+                missing_fields.append('cliente.cpfCnpj')
+            if not itens_a:
                 missing_fields.append('itens')
             
             if not EXECUTE_TINY_B:
@@ -91,6 +93,9 @@ async def process_job(job: dict) -> None:
                     "external_key": external_key,
                     "dry_run": True,
                     "has_fetched_payload": fetched_payload is not None,
+                    "cliente_nome": cliente.get('nome'),
+                    "cpf_cnpj": cpf_cnpj,
+                    "itens_count": len(itens_a),
                     "missing_fields": missing_fields if missing_fields else None,
                     "note": "EXECUTE_TINY_B=false"
                 }
@@ -109,17 +114,103 @@ async def process_job(job: dict) -> None:
                 logger.warning(f"Job {job_id} failed: No OAuth token for B")
                 return
             
-            order_payload_b = {
-                "situacao": 8,
-                "cliente": cliente,
-                "endereco": endereco,
-                "itens": itens,
-                "observacoes": f"Importado de A:{venda_id}"
-            }
-            
             client_b = TinyClient(token_b)
+            
+            id_contato_b = None
+            contact_created = False
+            try:
+                contacts = await client_b.search_contacts(cpf_cnpj)
+                if contacts:
+                    id_contato_b = contacts[0].get('id')
+                    logger.info(f"Found existing contact in B: {id_contato_b}")
+            except TinyApiError as e:
+                logger.warning(f"Error searching contacts: {e}")
+            
+            if not id_contato_b:
+                contact_payload = {
+                    "nome": cliente.get('nome'),
+                    "cpfCnpj": cpf_cnpj,
+                    "tipoPessoa": cliente.get('tipoPessoa') or ('J' if len(cpf_cnpj.replace('.','').replace('-','').replace('/','')) > 11 else 'F'),
+                    "email": cliente.get('email'),
+                    "telefone": cliente.get('telefone') or cliente.get('fone'),
+                    "celular": cliente.get('celular'),
+                    "endereco": {
+                        "endereco": endereco.get('endereco') or endereco.get('logradouro'),
+                        "numero": endereco.get('enderecoNro') or endereco.get('numero'),
+                        "complemento": endereco.get('complemento'),
+                        "bairro": endereco.get('bairro'),
+                        "municipio": endereco.get('municipio') or endereco.get('cidade'),
+                        "cep": endereco.get('cep'),
+                        "uf": endereco.get('uf')
+                    },
+                    "tipos": [1]
+                }
+                contact_payload = {k: v for k, v in contact_payload.items() if v is not None}
+                if contact_payload.get('endereco'):
+                    contact_payload['endereco'] = {k: v for k, v in contact_payload['endereco'].items() if v is not None}
+                
+                try:
+                    contact_result = await client_b.create_contact(contact_payload)
+                    id_contato_b = contact_result.get('id')
+                    contact_created = True
+                    logger.info(f"Created contact in B: {id_contato_b}")
+                except TinyApiError as e:
+                    await update_job_failed(job_id, f"Failed to create contact: {e.status_code} {e.body}", attempts)
+                    logger.error(f"Job {job_id} failed to create contact: {e}")
+                    return
+            
+            itens_b = []
+            for item in itens_a:
+                produto = item.get('produto') or item.get('item') or {}
+                codigo = produto.get('codigo') or item.get('codigo')
+                
+                if not codigo:
+                    continue
+                
+                try:
+                    products = await client_b.search_products(codigo)
+                    if products:
+                        produto_b_id = products[0].get('id')
+                        itens_b.append({
+                            "produto": {"id": produto_b_id},
+                            "quantidade": item.get('quantidade', 1),
+                            "valorUnitario": item.get('valorUnitario') or item.get('valor')
+                        })
+                except TinyApiError as e:
+                    logger.warning(f"Product {codigo} not found in B: {e}")
+            
+            if not itens_b:
+                await update_job_failed(job_id, "No products mapped from A to B", attempts)
+                logger.warning(f"Job {job_id} failed: no products mapped")
+                return
+            
+            endereco_entrega = {
+                "endereco": endereco.get('endereco') or endereco.get('logradouro'),
+                "enderecoNro": endereco.get('enderecoNro') or endereco.get('numero'),
+                "complemento": endereco.get('complemento'),
+                "bairro": endereco.get('bairro'),
+                "municipio": endereco.get('municipio') or endereco.get('cidade'),
+                "cep": endereco.get('cep'),
+                "uf": endereco.get('uf'),
+                "nomeDestinatario": cliente.get('nome'),
+                "cpfCnpj": cpf_cnpj,
+                "fone": cliente.get('telefone') or cliente.get('fone')
+            }
+            endereco_entrega = {k: v for k, v in endereco_entrega.items() if v is not None}
+            
+            order_payload_b = {
+                "idContato": id_contato_b,
+                "situacao": 8,
+                "itens": itens_b,
+                "enderecoEntrega": endereco_entrega,
+                "observacoes": f"Importado de A:{venda_id}",
+                "valorFrete": order_data.get('valorFrete'),
+                "valorDesconto": order_data.get('valorDesconto')
+            }
+            order_payload_b = {k: v for k, v in order_payload_b.items() if v is not None}
+            
             result = await client_b.create_order(order_payload_b)
-            venda_b_id = str(result.get('id') or result.get('idPedido') or '')
+            venda_b_id = str(result.get('id') or result.get('numeroPedido') or '')
             
             await upsert_orders_map_with_b(external_key=external_key, venda_a_id=str(venda_id), venda_b_id=venda_b_id)
             
@@ -129,6 +220,9 @@ async def process_job(job: dict) -> None:
                 "venda_a_id": venda_id,
                 "venda_b_id": venda_b_id,
                 "external_key": external_key,
+                "id_contato_b": id_contato_b,
+                "contact_created": contact_created,
+                "itens_mapped": len(itens_b),
                 "created": True
             }
             await update_job_done(job_id, action_preview)

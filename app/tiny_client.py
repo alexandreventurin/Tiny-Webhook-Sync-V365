@@ -70,3 +70,31 @@ class TinyClient:
             if response.status_code not in (200, 201):
                 raise TinyApiError(response.status_code, response.text, url)
             return response.json()
+    
+    async def search_contacts(self, cpf_cnpj: str) -> list:
+        url = f"{self._base_url}/contatos"
+        params = {"cpfCnpj": cpf_cnpj}
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, headers=self._headers(), params=params)
+            if response.status_code != 200:
+                raise TinyApiError(response.status_code, response.text, url)
+            data = response.json()
+            return data.get("itens", [])
+    
+    async def create_contact(self, contact_payload: dict) -> dict:
+        url = f"{self._base_url}/contatos"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, headers=self._headers(), json=contact_payload)
+            if response.status_code not in (200, 201):
+                raise TinyApiError(response.status_code, response.text, url)
+            return response.json()
+    
+    async def search_products(self, codigo: str) -> list:
+        url = f"{self._base_url}/produtos"
+        params = {"codigo": codigo}
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, headers=self._headers(), params=params)
+            if response.status_code != 200:
+                raise TinyApiError(response.status_code, response.text, url)
+            data = response.json()
+            return data.get("itens", [])

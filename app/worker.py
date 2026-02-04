@@ -30,7 +30,101 @@ from app.tiny_oauth import ensure_access_token
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-WORKER_BUILD = "2026-01-30-002"
+WORKER_BUILD = "2026-02-04-001"
+
+PRODUTO_ID_MAP = {
+    335959393: 853501914,  
+    335959369: 969386704, 
+    335959374: 853501837,  
+    335959379: 853501882,  
+    335959384: 961060387,
+}
+
+SKU_PRICE = {
+    "Rosto-5": 24.45,
+    "Te": 21.20,
+    "Pescoco": 9.65,
+    "Rosto-1t": 12.25,
+    "Rosto-2o": 12.25,
+    "Rosto-5too": 24.45,
+}
+
+SKU_ALIAS = {
+    "Rosto-5": "Rosto-5too",
+}
+
+DEST1_FE_SEDEX_ID = 846978945
+DEST1_FE_FM_ID = 895824123
+DEST1_FE_PAC_ID = 971399662
+DEST1_FE_ME_ID = 0
+DEST1_PRICE_LIST_ID = 915701964
+
+
+def map_sku(codigo: str | None) -> str | None:
+    if not codigo:
+        return None
+    return SKU_ALIAS.get(codigo, codigo)
+
+
+def price_for(codigo: str | None, fallback: float) -> float:
+    if codigo and codigo in SKU_PRICE:
+        return float(SKU_PRICE[codigo])
+    return float(fallback or 0)
+
+
+def transport_map_for_dest1(forma_envio_origem: str | None) -> dict:
+    if forma_envio_origem == "FM Transportes":
+        return {"formaEnvioId": DEST1_FE_FM_ID, "fretePorConta": "R"}
+    if forma_envio_origem == "Correios (Sedex)":
+        return {"formaEnvioId": DEST1_FE_SEDEX_ID, "fretePorConta": "R"}
+    if forma_envio_origem == "Correios (PAC)":
+        return {"formaEnvioId": DEST1_FE_PAC_ID, "fretePorConta": "R"}
+    if forma_envio_origem == "Mercado Envios" and DEST1_FE_ME_ID:
+        return {"formaEnvioId": DEST1_FE_ME_ID, "fretePorConta": "R"}
+    return {"formaEnvioId": None, "fretePorConta": "R"}
+
+
+def build_itens_dest_v3(itens_src: list) -> list:
+    out = []
+    for src in itens_src:
+        if not isinstance(src, dict):
+            continue
+        produto = src.get("produto") or {}
+        produto_id_origem = produto.get("id")
+        if not produto_id_origem:
+            logger.warning("Item sem produto.id, pulando")
+            continue
+        produto_id_destino = PRODUTO_ID_MAP.get(produto_id_origem)
+        if not produto_id_destino:
+            sku = produto.get("sku") or "?"
+            logger.warning(f"Produto ID {produto_id_origem} (SKU: {sku}) não mapeado, pulando")
+            continue
+        sku = produto.get("sku") or ""
+        quantidade = src.get("quantidade") or 1
+        valor_unitario = src.get("valorUnitario") or 0
+        codigo_destino = map_sku(sku)
+        valor_final = price_for(codigo_destino, valor_unitario)
+        out.append({
+            "produto": {"id": produto_id_destino},
+            "quantidade": quantidade,
+            "valorUnitario": float(valor_final),
+            "infoAdicional": f"SKU: {sku} (Origem ID: {produto_id_origem})"
+        })
+    logger.info(f"build_itens_dest_v3: mapeados={len(out)} de {len(itens_src)}")
+    return out
+
+
+def build_transportador_v3(forma_envio_origem: str | None, codigo: str | None, url: str | None) -> dict:
+    conf = transport_map_for_dest1(forma_envio_origem)
+    transportador = {
+        "id": 0,
+        "fretePorConta": conf.get("fretePorConta", "R"),
+        "codigoRastreamento": codigo or "",
+        "urlRastreamento": url or "",
+    }
+    if conf.get("formaEnvioId"):
+        transportador["formaEnvio"] = {"id": conf["formaEnvioId"]}
+    return transportador
 
 worker_running = False
 
@@ -158,28 +252,10 @@ async def process_job(job: dict) -> None:
                     logger.error(f"Job {job_id} failed to create contact: {e}")
                     return
             
-            itens_b = []
-            for item in itens_a:
-                produto = item.get('produto') or item.get('item') or {}
-                codigo = produto.get('codigo') or item.get('codigo')
-                
-                if not codigo:
-                    continue
-                
-                try:
-                    products = await client_b.search_products(codigo)
-                    if products:
-                        produto_b_id = products[0].get('id')
-                        itens_b.append({
-                            "produto": {"id": produto_b_id},
-                            "quantidade": item.get('quantidade', 1),
-                            "valorUnitario": item.get('valorUnitario') or item.get('valor')
-                        })
-                except TinyApiError as e:
-                    logger.warning(f"Product {codigo} not found in B: {e}")
+            itens_b = build_itens_dest_v3(itens_a)
             
             if not itens_b:
-                await update_job_failed(job_id, "No products mapped from A to B", attempts)
+                await update_job_failed(job_id, "No products mapped from A to B (check PRODUTO_ID_MAP)", attempts)
                 logger.warning(f"Job {job_id} failed: no products mapped")
                 return
             
@@ -197,15 +273,29 @@ async def process_job(job: dict) -> None:
             }
             endereco_entrega = {k: v for k, v in endereco_entrega.items() if v is not None}
             
+            transportador_src = order_data.get('transportador') or {}
+            forma_envio_src = (transportador_src.get('formaEnvio') or {}).get('nome')
+            codigo_rastreio = transportador_src.get('codigoRastreamento')
+            url_rastreio = transportador_src.get('urlRastreamento')
+            
+            ecommerce_src = order_data.get('ecommerce') or {}
+            numero_pedido_ecommerce = ecommerce_src.get('numeroPedidoEcommerce') or ""
+            
             order_payload_b = {
+                "data": order_data.get('data'),
                 "idContato": id_contato_b,
                 "situacao": 8,
+                "numeroOrdemCompra": str(order_data.get('numeroPedido') or ""),
                 "itens": itens_b,
                 "enderecoEntrega": endereco_entrega,
-                "observacoes": f"Importado de A:{venda_id}",
-                "valorFrete": order_data.get('valorFrete'),
-                "valorDesconto": order_data.get('valorDesconto')
+                "listaPreco": {"id": DEST1_PRICE_LIST_ID},
+                "transportador": build_transportador_v3(forma_envio_src, codigo_rastreio, url_rastreio),
+                "observacoes": f"Repasse Tiny - origem id {order_data.get('id')} nº {order_data.get('numeroPedido')}",
+                "valorFrete": float(str(order_data.get('valorFrete') or 0).replace(',', '.')),
+                "valorDesconto": float(str(order_data.get('valorDesconto') or 0).replace(',', '.'))
             }
+            if numero_pedido_ecommerce:
+                order_payload_b["ecommerce"] = {"id": 0, "numeroPedidoEcommerce": numero_pedido_ecommerce}
             order_payload_b = {k: v for k, v in order_payload_b.items() if v is not None}
             
             result = await client_b.create_order(order_payload_b)

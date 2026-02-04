@@ -17,12 +17,14 @@ from app.db import (
     get_order_a_snapshot,
     get_snapshot_fetched_at,
     insert_job,
-    reset_stale_locks
+    reset_stale_locks,
+    count_orders_replicated_to_b
 )
 from app.settings import (
     TINY_A_TOKEN, TINY_B_TOKEN, 
     ENABLE_FETCH_A, EXECUTE_TINY_B, 
-    ALLOW_VENDA_IDS, FETCH_CACHE_MINUTES
+    ALLOW_VENDA_IDS, FETCH_CACHE_MINUTES,
+    MAX_ORDERS_TO_REPLICATE
 )
 from app.tiny_client import TinyClient, TinyApiError
 from app.tiny_oauth import ensure_access_token
@@ -30,7 +32,7 @@ from app.tiny_oauth import ensure_access_token
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-WORKER_BUILD = "2026-02-04-002"
+WORKER_BUILD = "2026-02-04-003"
 
 PRODUTO_ID_MAP = {
     335959393: 853501914,  
@@ -234,6 +236,19 @@ async def process_job(job: dict) -> None:
                 await update_job_failed(job_id, "missing_venda_id", attempts)
                 logger.warning(f"Job {job_id} failed: missing_venda_id")
                 return
+            
+            if MAX_ORDERS_TO_REPLICATE > 0:
+                current_count = await count_orders_replicated_to_b()
+                if current_count >= MAX_ORDERS_TO_REPLICATE:
+                    action_preview = {
+                        "would": "create_order_in_B",
+                        "skipped": True,
+                        "reason": f"MAX_ORDERS_TO_REPLICATE limit reached ({current_count}/{MAX_ORDERS_TO_REPLICATE})",
+                        "venda_a_id": venda_id
+                    }
+                    await update_job_done(job_id, action_preview)
+                    logger.info(f"Job {job_id} skipped: MAX_ORDERS_TO_REPLICATE limit reached ({current_count}/{MAX_ORDERS_TO_REPLICATE})")
+                    return
             
             external_key = f"A:{venda_id}"
             snapshot = await get_order_a_snapshot(str(venda_id))

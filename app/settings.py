@@ -22,3 +22,5 @@ _allow_ids_raw = os.getenv("ALLOW_VENDA_IDS", "")
 ALLOW_VENDA_IDS = set([x.strip() for x in _allow_ids_raw.split(",") if x.strip()])
 
 FETCH_CACHE_MINUTES = int(os.getenv("FETCH_CACHE_MINUTES", "10"))
+
+MAX_ORDERS_TO_REPLICATE = int(os.getenv("MAX_ORDERS_TO_REPLICATE", "0"))

@@ -53,6 +53,8 @@ def normalize_status(codigo_situacao) -> str | None:
         return None
     if isinstance(codigo_situacao, int):
         status_map = {
+            1: "aberto",
+            2: "em_aberto",
             3: "aprovado",
             4: "faturado",
             5: "enviado",
@@ -61,7 +63,7 @@ def normalize_status(codigo_situacao) -> str | None:
             9: "cancelado"
         }
         return status_map.get(codigo_situacao)
-    s = str(codigo_situacao).strip().lower()
+    s = str(codigo_situacao).strip().lower().replace(" ", "_")
     return s if s else None
 
 
@@ -69,7 +71,7 @@ def determine_job_type(source: str, topic: str, codigo_situacao) -> str:
     status = normalize_status(codigo_situacao)
     
     if source == "A" and topic == "vendas":
-        if status == "aprovado":
+        if status in ("aberto", "em_aberto", "aprovado"):
             return "fetch_order_a"
         if status in ("pronto_envio", "entregue"):
             return "sync_status"

@@ -491,3 +491,13 @@ async def get_orders_map_list(limit: int) -> list[dict]:
             LIMIT $1
         """, limit)
         return [dict(row) for row in rows]
+
+
+async def count_orders_replicated_to_b() -> int:
+    """Conta quantos pedidos foram replicados para B (orders_map com venda_b_id preenchido)."""
+    p = await get_pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT COUNT(*) as cnt FROM public.orders_map WHERE venda_b_id IS NOT NULL
+        """)
+        return row['cnt'] if row else 0

@@ -102,6 +102,29 @@ app/
 - Respects feature flags and allowlist
 - Rate limit via FETCH_CACHE_MINUTES
 
+## Product & Transport Mapping
+
+### PRODUTO_ID_MAP
+Direct product ID mapping from Tiny A to Tiny B (hardcoded in worker.py):
+- Maps produto.id from source to destination
+- Example: `335959369 → 969386704`
+
+### SKU_PRICE / SKU_ALIAS
+- SKU_PRICE: Override unit prices for specific SKUs
+- SKU_ALIAS: Normalize SKU variations (e.g., "Rj Kit" → "RJ Kit")
+
+### Transport Mapping (DEST1_FE_*)
+- SEDEX: `DEST1_FE_SEDEX_ID = 846978945`
+- PAC: `DEST1_FE_PAC_ID = 971399662`
+- FM (Full/FULL): `DEST1_FE_FM_ID = 895824123`
+- DEST1_PRICE_LIST_ID: `915701964`
+
+### Order Payload Fields (create_order_b)
+- `listaPreco`: Links to price list in B
+- `transportador`: Maps shipping method via `build_transportador_v3()`
+- `numeroOrdemCompra`: Source order number
+- `ecommerce.numeroPedidoEcommerce`: E-commerce reference
+
 ## Running
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 5000 --reload

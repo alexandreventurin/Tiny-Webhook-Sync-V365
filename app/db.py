@@ -539,3 +539,47 @@ async def upsert_product_map(id_a: int, sku: str, descricao: str, situacao: str,
                 ativo = EXCLUDED.ativo,
                 updated_at = NOW()
         """, id_a, sku, descricao, situacao, ativo)
+
+
+async def retry_failed_jobs(job_type: str | None = None) -> int:
+    """Recoloca jobs falhos na fila para reprocessamento."""
+    p = await get_pool()
+    async with p.acquire() as conn:
+        if job_type:
+            result = await conn.execute("""
+                UPDATE public.jobs
+                SET status = 'queued',
+                    attempts = 0,
+                    last_error = NULL,
+                    locked_at = NULL,
+                    locked_by = NULL,
+                    run_after = NOW()
+                WHERE status = 'failed' AND job_type = $1
+            """, job_type)
+        else:
+            result = await conn.execute("""
+                UPDATE public.jobs
+                SET status = 'queued',
+                    attempts = 0,
+                    last_error = NULL,
+                    locked_at = NULL,
+                    locked_by = NULL,
+                    run_after = NOW()
+                WHERE status = 'failed'
+            """)
+        count = int(result.split()[-1]) if result else 0
+        logger.info(f"Retried {count} failed jobs")
+        return count
+
+
+async def get_failed_jobs_count() -> dict:
+    """Conta jobs falhos por tipo."""
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT job_type, COUNT(*) as count
+            FROM public.jobs
+            WHERE status = 'failed'
+            GROUP BY job_type
+        """)
+        return {row['job_type']: row['count'] for row in rows}

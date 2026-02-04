@@ -214,6 +214,37 @@ async def admin_worker_run_once(limit: int = 50):
     return result
 
 
+@app.post("/admin/jobs/retry-failed")
+async def admin_retry_failed_jobs(job_type: str = None):
+    from app.db import retry_failed_jobs, get_failed_jobs_count
+    
+    before = await get_failed_jobs_count()
+    retried = await retry_failed_jobs(job_type)
+    after = await get_failed_jobs_count()
+    
+    return {
+        "ok": True,
+        "retried": retried,
+        "job_type_filter": job_type,
+        "failed_before": before,
+        "failed_after": after
+    }
+
+
+@app.get("/admin/jobs/failed-count")
+async def admin_failed_jobs_count():
+    from app.db import get_failed_jobs_count
+    
+    counts = await get_failed_jobs_count()
+    total = sum(counts.values())
+    
+    return {
+        "ok": True,
+        "total": total,
+        "by_type": counts
+    }
+
+
 @app.get("/admin/orders-a", response_model=OrderAListResponse)
 async def admin_orders_a(limit: int = 50):
     orders = await get_orders_a_list(limit=limit)

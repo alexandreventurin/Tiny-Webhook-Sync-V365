@@ -52,6 +52,8 @@ app/
 - `GET /admin/runtime` - Returns APP_BUILD and WORKER_BUILD versions
 - `GET /admin/jobs?status=queued&limit=50` - List jobs by status
 - `POST /admin/jobs/run?limit=50` - Manual job processing round
+- `POST /admin/jobs/retry-failed?job_type=create_order_b` - Reprocessar jobs falhos (opcional: filtrar por tipo)
+- `GET /admin/jobs/failed-count` - Conta jobs falhos por tipo
 - `POST /admin/worker/run_once?limit=50` - Debug: run worker once with detailed results
 - `GET /admin/orders-a?limit=50` - List order snapshots
 - `GET /admin/orders-a/{venda_a_id}` - Get specific order snapshot

@@ -98,3 +98,25 @@ class TinyClient:
                 raise TinyApiError(response.status_code, response.text, url)
             data = response.json()
             return data.get("itens", [])
+    
+    async def list_all_products(self, limit: int = 100) -> list:
+        url = f"{self._base_url}/produtos"
+        all_products = []
+        offset = 0
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            while True:
+                params = {"limite": min(limit, 100), "offset": offset}
+                response = await client.get(url, headers=self._headers(), params=params)
+                if response.status_code != 200:
+                    raise TinyApiError(response.status_code, response.text, url)
+                data = response.json()
+                items = data.get("itens", [])
+                if not items:
+                    break
+                all_products.extend(items)
+                if len(items) < 100:
+                    break
+                offset += len(items)
+                if len(all_products) >= 1000:
+                    break
+        return all_products

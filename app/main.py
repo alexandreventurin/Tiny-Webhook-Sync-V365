@@ -291,6 +291,40 @@ async def admin_tiny_a_test_contatos():
         }
 
 
+@app.get("/admin/tiny_a/produtos")
+async def admin_tiny_a_produtos():
+    from app.tiny_oauth import ensure_access_token
+    from app.tiny_client import TinyClient
+    from app.worker import PRODUTO_ID_MAP
+    
+    token = await ensure_access_token("A")
+    if not token:
+        return {"ok": False, "error": "No valid token for account A"}
+    
+    client = TinyClient(token)
+    try:
+        products = await client.list_all_products()
+        result = []
+        for p in products:
+            pid = p.get("id")
+            result.append({
+                "id": pid,
+                "sku": p.get("sku") or p.get("codigo") or "",
+                "descricao": p.get("descricao") or p.get("nome") or "",
+                "id_b": PRODUTO_ID_MAP.get(pid),
+                "mapeado": pid in PRODUTO_ID_MAP
+            })
+        return {
+            "ok": True,
+            "total": len(result),
+            "mapeados": sum(1 for r in result if r["mapeado"]),
+            "nao_mapeados": sum(1 for r in result if not r["mapeado"]),
+            "produtos": result
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/admin/tiny_b/ping")
 async def admin_tiny_b_ping(venda_id: str):
     from app.tiny_oauth import ensure_access_token

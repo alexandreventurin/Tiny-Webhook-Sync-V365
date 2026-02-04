@@ -62,6 +62,11 @@ app/
 - `GET /admin/tiny_b/ping?venda_id=XXXXX` - Test Tiny B auth (GET /pedidos/{id})
 - `GET /admin/tokens` - List OAuth token status (A/B) without exposing secrets
 
+### Product Mapping
+- `GET /admin/tiny_a/produtos` - List all products from Tiny A with mapping status
+- `POST /admin/tiny_a/produtos/sync` - Sync products from Tiny A to products_map table
+- `GET /admin/products_map` - List all products from database table (for João to edit in Supabase)
+
 ### OAuth Endpoints
 - `GET /auth/a/start` - Start OAuth flow for Tiny A (redirect to Tiny)
 - `GET /auth/a/callback` - Callback from Tiny A OAuth, saves tokens
@@ -74,6 +79,7 @@ app/
 - `public.orders_map` - Maps external keys to order IDs (venda_a_id -> venda_b_id)
 - `public.orders_a_snapshot` - Stores webhook and fetched payloads from Tiny A (includes last_error, needs_fetch)
 - `public.tiny_tokens` - OAuth tokens for accounts A/B (access_token, refresh_token, expires_at)
+- `public.products_map` - Mapeamento de produtos A -> B (editável pelo João no Supabase)
 
 ## Job Flow
 

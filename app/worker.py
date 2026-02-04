@@ -30,7 +30,7 @@ from app.tiny_oauth import ensure_access_token
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-WORKER_BUILD = "2026-02-04-001"
+WORKER_BUILD = "2026-02-04-002"
 
 PRODUTO_ID_MAP = {
     335959393: 853501914,  
@@ -59,6 +59,57 @@ DEST1_FE_PAC_ID = 971399662
 DEST1_FE_ME_ID = 0
 DEST1_PRICE_LIST_ID = 915701964
 
+FORMA_ENVIO_MAP = {
+    "FM Transportes": {
+        "formaEnvioId": DEST1_FE_FM_ID,
+        "fretePorConta": "R",
+        "formaFreteMap": {
+            "Standard": "Standard",
+            "FMSTD": "Standard",
+            "EXPRESSO": "EXPRESSO",
+            "FMEXP": "EXPRESSO",
+        },
+        "defaultFormaFrete": "Standard",
+    },
+    "Correios (Sedex)": {
+        "formaEnvioId": DEST1_FE_SEDEX_ID,
+        "fretePorConta": "R",
+        "formaFreteMap": {
+            "SEDEX CONTRATO AG (03220)": "SEDEX CONTRATO AG (03220)",
+            "03220": "SEDEX CONTRATO AG (03220)",
+            "SEDEX 12 CONTRATO AG (03140)": "SEDEX 12 CONTRATO AG (03140)",
+            "03140": "SEDEX 12 CONTRATO AG (03140)",
+            "SEDEX 10 CONTRATO AG (03158)": "SEDEX 10 CONTRATO AG (03158)",
+            "03158": "SEDEX 10 CONTRATO AG (03158)",
+            "SEDEX HOJE CONTRATO AG (03204)": "SEDEX HOJE CONTRATO AG (03204)",
+            "03204": "SEDEX HOJE CONTRATO AG (03204)",
+        },
+        "defaultFormaFrete": "SEDEX CONTRATO AG (03220)",
+    },
+    "Correios (PAC)": {
+        "formaEnvioId": DEST1_FE_PAC_ID,
+        "fretePorConta": "R",
+        "formaFreteMap": {
+            "PAC CONTRATO AG (03298)": "PAC CONTRATO AG (03298)",
+            "03298": "PAC CONTRATO AG (03298)",
+            "CORREIOS MINI ENVIOS CTR AG (04227)": "CORREIOS MINI ENVIOS CTR AG (04227)",
+            "04227": "CORREIOS MINI ENVIOS CTR AG (04227)",
+        },
+        "defaultFormaFrete": "PAC CONTRATO AG (03298)",
+    },
+    "Mercado Envios": {
+        "formaEnvioId": DEST1_FE_ME_ID if DEST1_FE_ME_ID else None,
+        "fretePorConta": "R",
+        "formaFreteMap": {
+            "PAC": "PAC",
+            "21": "PAC",
+            "Sedex": "Sedex",
+            "22": "Sedex",
+        },
+        "defaultFormaFrete": None,
+    },
+}
+
 
 def map_sku(codigo: str | None) -> str | None:
     if not codigo:
@@ -72,16 +123,27 @@ def price_for(codigo: str | None, fallback: float) -> float:
     return float(fallback or 0)
 
 
-def transport_map_for_dest1(forma_envio_origem: str | None) -> dict:
-    if forma_envio_origem == "FM Transportes":
-        return {"formaEnvioId": DEST1_FE_FM_ID, "fretePorConta": "R"}
-    if forma_envio_origem == "Correios (Sedex)":
-        return {"formaEnvioId": DEST1_FE_SEDEX_ID, "fretePorConta": "R"}
-    if forma_envio_origem == "Correios (PAC)":
-        return {"formaEnvioId": DEST1_FE_PAC_ID, "fretePorConta": "R"}
-    if forma_envio_origem == "Mercado Envios" and DEST1_FE_ME_ID:
-        return {"formaEnvioId": DEST1_FE_ME_ID, "fretePorConta": "R"}
-    return {"formaEnvioId": None, "fretePorConta": "R"}
+def get_forma_envio_config(forma_envio_nome: str | None) -> dict:
+    """Retorna a configuração de forma de envio para o destino B."""
+    if not forma_envio_nome:
+        logger.warning("get_forma_envio_config: forma_envio_nome is None")
+        return {"formaEnvioId": None, "fretePorConta": "R", "formaFreteMap": {}, "defaultFormaFrete": None}
+    config = FORMA_ENVIO_MAP.get(forma_envio_nome)
+    if config:
+        if not config.get("formaEnvioId"):
+            logger.warning(f"get_forma_envio_config: '{forma_envio_nome}' configurado mas sem formaEnvioId (desabilitado)")
+        return config
+    logger.warning(f"get_forma_envio_config: '{forma_envio_nome}' não encontrado no FORMA_ENVIO_MAP")
+    return {"formaEnvioId": None, "fretePorConta": "R", "formaFreteMap": {}, "defaultFormaFrete": None}
+
+
+def map_forma_frete(forma_envio_nome: str | None, forma_frete_origem: str | None) -> str | None:
+    """Mapeia a forma de frete de A para B."""
+    config = get_forma_envio_config(forma_envio_nome)
+    frete_map = config.get("formaFreteMap", {})
+    if forma_frete_origem and forma_frete_origem in frete_map:
+        return frete_map[forma_frete_origem]
+    return config.get("defaultFormaFrete")
 
 
 def build_itens_dest_v3(itens_src: list) -> list:
@@ -114,16 +176,33 @@ def build_itens_dest_v3(itens_src: list) -> list:
     return out
 
 
-def build_transportador_v3(forma_envio_origem: str | None, codigo: str | None, url: str | None) -> dict:
-    conf = transport_map_for_dest1(forma_envio_origem)
+def build_transportador_v3(
+    forma_envio_origem: str | None,
+    forma_frete_origem: str | None,
+    codigo_rastreio: str | None,
+    url_rastreio: str | None,
+    volumes: int = 1
+) -> dict:
+    """Constrói o payload de transportador para criar pedido em B."""
+    config = get_forma_envio_config(forma_envio_origem)
+    forma_frete_dest = map_forma_frete(forma_envio_origem, forma_frete_origem)
+    
     transportador = {
         "id": 0,
-        "fretePorConta": conf.get("fretePorConta", "R"),
-        "codigoRastreamento": codigo or "",
-        "urlRastreamento": url or "",
+        "fretePorConta": config.get("fretePorConta", "R"),
+        "codigoRastreamento": codigo_rastreio or "",
+        "urlRastreamento": url_rastreio or "",
+        "volumes": volumes,
     }
-    if conf.get("formaEnvioId"):
-        transportador["formaEnvio"] = {"id": conf["formaEnvioId"]}
+    
+    forma_envio_id = config.get("formaEnvioId")
+    if forma_envio_id:
+        forma_envio_obj = {"id": forma_envio_id}
+        if forma_frete_dest:
+            forma_envio_obj["formaFrete"] = forma_frete_dest
+        transportador["formaEnvio"] = forma_envio_obj
+    
+    logger.info(f"build_transportador_v3: forma_envio={forma_envio_origem}, forma_frete_origem={forma_frete_origem}, forma_frete_dest={forma_frete_dest}, volumes={volumes}")
     return transportador
 
 worker_running = False
@@ -274,12 +353,26 @@ async def process_job(job: dict) -> None:
             endereco_entrega = {k: v for k, v in endereco_entrega.items() if v is not None}
             
             transportador_src = order_data.get('transportador') or {}
-            forma_envio_src = (transportador_src.get('formaEnvio') or {}).get('nome')
+            forma_envio_obj = transportador_src.get('formaEnvio') or {}
+            forma_envio_src = forma_envio_obj.get('nome')
+            forma_frete_src = forma_envio_obj.get('formaFrete')
             codigo_rastreio = transportador_src.get('codigoRastreamento')
             url_rastreio = transportador_src.get('urlRastreamento')
+            volumes_raw = transportador_src.get('volumes')
+            if isinstance(volumes_raw, int):
+                volumes_src = max(1, volumes_raw)
+            elif isinstance(volumes_raw, str) and volumes_raw.isdigit():
+                volumes_src = max(1, int(volumes_raw))
+            else:
+                volumes_src = 1
             
             ecommerce_src = order_data.get('ecommerce') or {}
             numero_pedido_ecommerce = ecommerce_src.get('numeroPedidoEcommerce') or ""
+            
+            obs_extra = f"[Origem: {forma_envio_src or 'N/A'}"
+            if forma_frete_src:
+                obs_extra += f" | Frete: {forma_frete_src}"
+            obs_extra += "]"
             
             order_payload_b = {
                 "data": order_data.get('data'),
@@ -289,8 +382,14 @@ async def process_job(job: dict) -> None:
                 "itens": itens_b,
                 "enderecoEntrega": endereco_entrega,
                 "listaPreco": {"id": DEST1_PRICE_LIST_ID},
-                "transportador": build_transportador_v3(forma_envio_src, codigo_rastreio, url_rastreio),
-                "observacoes": f"Repasse Tiny - origem id {order_data.get('id')} nº {order_data.get('numeroPedido')}",
+                "transportador": build_transportador_v3(
+                    forma_envio_origem=forma_envio_src,
+                    forma_frete_origem=forma_frete_src,
+                    codigo_rastreio=codigo_rastreio,
+                    url_rastreio=url_rastreio,
+                    volumes=volumes_src
+                ),
+                "observacoes": f"Repasse Tiny - origem id {order_data.get('id')} nº {order_data.get('numeroPedido')} {obs_extra}",
                 "valorFrete": float(str(order_data.get('valorFrete') or 0).replace(',', '.')),
                 "valorDesconto": float(str(order_data.get('valorDesconto') or 0).replace(',', '.'))
             }
@@ -312,10 +411,13 @@ async def process_job(job: dict) -> None:
                 "id_contato_b": id_contato_b,
                 "contact_created": contact_created,
                 "itens_mapped": len(itens_b),
+                "forma_envio_origem": forma_envio_src,
+                "forma_frete_origem": forma_frete_src,
+                "volumes": volumes_src,
                 "created": True
             }
             await update_job_done(job_id, action_preview)
-            logger.info(f"Job {job_id} completed: created order in B with id {venda_b_id}")
+            logger.info(f"Job {job_id} completed: created order in B with id {venda_b_id} (envio={forma_envio_src}, frete={forma_frete_src})")
         
         elif job_type == 'fetch_order_a':
             if not venda_id:

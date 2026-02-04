@@ -113,17 +113,27 @@ Direct product ID mapping from Tiny A to Tiny B (hardcoded in worker.py):
 - SKU_PRICE: Override unit prices for specific SKUs
 - SKU_ALIAS: Normalize SKU variations (e.g., "Rj Kit" → "RJ Kit")
 
-### Transport Mapping (DEST1_FE_*)
-- SEDEX: `DEST1_FE_SEDEX_ID = 846978945`
-- PAC: `DEST1_FE_PAC_ID = 971399662`
-- FM (Full/FULL): `DEST1_FE_FM_ID = 895824123`
-- DEST1_PRICE_LIST_ID: `915701964`
+### Transport Mapping (FORMA_ENVIO_MAP)
+Mapeamento completo de formas de envio de A para B com suporte a formas de frete:
+
+| Forma Envio A | ID Destino B | Formas de Frete |
+|---------------|--------------|-----------------|
+| FM Transportes | 895824123 | Standard (default), EXPRESSO |
+| Correios (Sedex) | 846978945 | SEDEX CONTRATO AG (03220) (default), SEDEX 12, SEDEX 10, SEDEX HOJE |
+| Correios (PAC) | 971399662 | PAC CONTRATO AG (03298) (default), MINI ENVIOS |
+| Mercado Envios | (não configurado) | PAC, Sedex |
 
 ### Order Payload Fields (create_order_b)
-- `listaPreco`: Links to price list in B
+- `listaPreco`: Links to price list in B (ID: 915701964)
 - `transportador`: Maps shipping method via `build_transportador_v3()`
+  - `formaEnvio.id`: ID da forma de envio mapeada
+  - `formaEnvio.formaFrete`: Tipo de frete (Standard, SEDEX CONTRATO AG, etc)
+  - `volumes`: Quantidade de volumes do pedido original
+  - `codigoRastreamento`: Código de rastreio (se disponível)
+  - `urlRastreamento`: URL de rastreio (se disponível)
 - `numeroOrdemCompra`: Source order number
 - `ecommerce.numeroPedidoEcommerce`: E-commerce reference
+- `observacoes`: Inclui dados de origem (forma de envio/frete original)
 
 ## Running
 ```bash

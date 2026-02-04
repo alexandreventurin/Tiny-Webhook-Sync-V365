@@ -332,6 +332,57 @@ async def admin_tiny_a_produtos():
         return {"ok": False, "error": str(e)}
 
 
+@app.post("/admin/tiny_a/produtos/sync")
+async def admin_tiny_a_produtos_sync():
+    from app.tiny_oauth import ensure_access_token
+    from app.tiny_client import TinyClient
+    from app.db import upsert_product_map
+    
+    token = await ensure_access_token("A")
+    if not token:
+        return {"ok": False, "error": "No valid token for account A"}
+    
+    client = TinyClient(token)
+    try:
+        products = await client.list_all_products()
+        updated = 0
+        for p in products:
+            pid = p.get("id")
+            sku = p.get("sku") or p.get("codigo") or ""
+            descricao = p.get("descricao") or p.get("nome") or ""
+            situacao = p.get("situacao", "")
+            ativo = situacao == "A" or situacao == "Ativo" or str(situacao).lower() == "ativo"
+            await upsert_product_map(pid, sku, descricao, situacao, ativo)
+            updated += 1
+        return {
+            "ok": True,
+            "message": f"Synchronized {updated} products from Tiny A to products_map table",
+            "updated": updated
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/admin/products_map")
+async def admin_products_map():
+    from app.db import get_products_map_list
+    
+    try:
+        products = await get_products_map_list()
+        mapeados = [p for p in products if p.get("id_b")]
+        ativos = [p for p in products if p.get("ativo")]
+        return {
+            "ok": True,
+            "total": len(products),
+            "mapeados": len(mapeados),
+            "nao_mapeados": len(products) - len(mapeados),
+            "ativos": len(ativos),
+            "produtos": products
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/admin/tiny_b/ping")
 async def admin_tiny_b_ping(venda_id: str):
     from app.tiny_oauth import ensure_access_token

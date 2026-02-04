@@ -501,3 +501,41 @@ async def count_orders_replicated_to_b() -> int:
             SELECT COUNT(*) as cnt FROM public.orders_map WHERE venda_b_id IS NOT NULL
         """)
         return row['cnt'] if row else 0
+
+
+async def load_products_map() -> dict[int, int]:
+    """Carrega mapeamento de produtos A -> B da tabela products_map."""
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id_a, id_b FROM public.products_map WHERE id_b IS NOT NULL
+        """)
+        return {row['id_a']: row['id_b'] for row in rows}
+
+
+async def get_products_map_list() -> list[dict]:
+    """Lista todos os produtos da tabela products_map."""
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id_a, id_b, sku, descricao, situacao, ativo, updated_at
+            FROM public.products_map
+            ORDER BY id_a
+        """)
+        return [dict(row) for row in rows]
+
+
+async def upsert_product_map(id_a: int, sku: str, descricao: str, situacao: str, ativo: bool):
+    """Insere ou atualiza um produto na tabela products_map."""
+    p = await get_pool()
+    async with p.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO public.products_map (id_a, sku, descricao, situacao, ativo)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (id_a) DO UPDATE SET
+                sku = EXCLUDED.sku,
+                descricao = EXCLUDED.descricao,
+                situacao = EXCLUDED.situacao,
+                ativo = EXCLUDED.ativo,
+                updated_at = NOW()
+        """, id_a, sku, descricao, situacao, ativo)

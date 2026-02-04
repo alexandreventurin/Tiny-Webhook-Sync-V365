@@ -18,7 +18,8 @@ from app.db import (
     get_snapshot_fetched_at,
     insert_job,
     reset_stale_locks,
-    count_orders_replicated_to_b
+    count_orders_replicated_to_b,
+    load_products_map
 )
 from app.settings import (
     TINY_A_TOKEN, TINY_B_TOKEN, 
@@ -32,15 +33,18 @@ from app.tiny_oauth import ensure_access_token
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-WORKER_BUILD = "2026-02-04-003"
+WORKER_BUILD = "2026-02-04-004"
 
-PRODUTO_ID_MAP = {
-    335959393: 853501914,  
-    335959369: 969386704, 
-    335959374: 853501837,  
-    335959379: 853501882,  
-    335959384: 961060387,
-}
+PRODUTO_ID_MAP: dict[int, int] = {}
+
+async def refresh_products_map():
+    """Recarrega o mapeamento de produtos do banco de dados."""
+    global PRODUTO_ID_MAP
+    try:
+        PRODUTO_ID_MAP = await load_products_map()
+        logger.info(f"Products map loaded: {len(PRODUTO_ID_MAP)} mappings")
+    except Exception as e:
+        logger.error(f"Failed to load products map: {e}")
 
 SKU_PRICE = {
     "Rosto-5": 24.45,
@@ -630,13 +634,19 @@ async def run_worker_once_detailed(limit: int = 50) -> dict:
 async def worker_loop():
     global worker_running
     worker_running = True
+    await refresh_products_map()
     logger.info("Worker started")
     
+    refresh_counter = 0
     while worker_running:
         try:
+            if refresh_counter >= 60:
+                await refresh_products_map()
+                refresh_counter = 0
             processed = await run_worker_once(limit=25)
             if processed > 0:
                 logger.info(f"Worker processed {processed} jobs")
+            refresh_counter += 1
         except Exception as e:
             logger.error(f"Worker error: {e}")
         

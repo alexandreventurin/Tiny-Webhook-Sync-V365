@@ -307,16 +307,23 @@ async def admin_tiny_a_produtos():
         result = []
         for p in products:
             pid = p.get("id")
+            situacao = p.get("situacao", "")
+            ativo = situacao == "A" or situacao == "Ativo" or str(situacao).lower() == "ativo"
             result.append({
                 "id": pid,
                 "sku": p.get("sku") or p.get("codigo") or "",
                 "descricao": p.get("descricao") or p.get("nome") or "",
+                "situacao": situacao,
+                "ativo": ativo,
                 "id_b": PRODUTO_ID_MAP.get(pid),
                 "mapeado": pid in PRODUTO_ID_MAP
             })
+        ativos = [r for r in result if r["ativo"]]
         return {
             "ok": True,
             "total": len(result),
+            "ativos": len(ativos),
+            "inativos": len(result) - len(ativos),
             "mapeados": sum(1 for r in result if r["mapeado"]),
             "nao_mapeados": sum(1 for r in result if not r["mapeado"]),
             "produtos": result

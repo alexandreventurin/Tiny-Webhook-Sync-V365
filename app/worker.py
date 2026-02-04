@@ -33,16 +33,18 @@ from app.tiny_oauth import ensure_access_token
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-WORKER_BUILD = "2026-02-04-004"
+WORKER_BUILD = "2026-02-04-005"
 
 PRODUTO_ID_MAP: dict[int, int] = {}
+_products_map_loaded = False
 
 async def refresh_products_map():
     """Recarrega o mapeamento de produtos do banco de dados."""
-    global PRODUTO_ID_MAP
+    global PRODUTO_ID_MAP, _products_map_loaded
     try:
         PRODUTO_ID_MAP = await load_products_map()
-        logger.info(f"Products map loaded: {len(PRODUTO_ID_MAP)} mappings")
+        _products_map_loaded = True
+        logger.info(f"Products map reloaded: {len(PRODUTO_ID_MAP)} mappings")
     except Exception as e:
         logger.error(f"Failed to load products map: {e}")
 
@@ -152,8 +154,11 @@ def map_forma_frete(forma_envio_nome: str | None, forma_frete_origem: str | None
     return config.get("defaultFormaFrete")
 
 
-def build_itens_dest_v3(itens_src: list) -> list:
+async def build_itens_dest_v3(itens_src: list, retry_on_miss: bool = True) -> list:
+    global PRODUTO_ID_MAP
     out = []
+    missing_ids = []
+    
     for src in itens_src:
         if not isinstance(src, dict):
             continue
@@ -164,8 +169,7 @@ def build_itens_dest_v3(itens_src: list) -> list:
             continue
         produto_id_destino = PRODUTO_ID_MAP.get(produto_id_origem)
         if not produto_id_destino:
-            sku = produto.get("sku") or "?"
-            logger.warning(f"Produto ID {produto_id_origem} (SKU: {sku}) não mapeado, pulando")
+            missing_ids.append((produto_id_origem, produto.get("sku") or "?"))
             continue
         sku = produto.get("sku") or ""
         quantidade = src.get("quantidade") or 1
@@ -178,6 +182,15 @@ def build_itens_dest_v3(itens_src: list) -> list:
             "valorUnitario": float(valor_final),
             "infoAdicional": f"SKU: {sku} (Origem ID: {produto_id_origem})"
         })
+    
+    if missing_ids and retry_on_miss:
+        logger.info(f"Found {len(missing_ids)} unmapped products, reloading from database...")
+        await refresh_products_map()
+        return await build_itens_dest_v3(itens_src, retry_on_miss=False)
+    
+    for pid, sku in missing_ids:
+        logger.warning(f"Produto ID {pid} (SKU: {sku}) não mapeado, pulando")
+    
     logger.info(f"build_itens_dest_v3: mapeados={len(out)} de {len(itens_src)}")
     return out
 
@@ -350,10 +363,10 @@ async def process_job(job: dict) -> None:
                     logger.error(f"Job {job_id} failed to create contact: {e}")
                     return
             
-            itens_b = build_itens_dest_v3(itens_a)
+            itens_b = await build_itens_dest_v3(itens_a)
             
             if not itens_b:
-                await update_job_failed(job_id, "No products mapped from A to B (check PRODUTO_ID_MAP)", attempts)
+                await update_job_failed(job_id, "No products mapped from A to B (check products_map table)", attempts)
                 logger.warning(f"Job {job_id} failed: no products mapped")
                 return
             
@@ -637,16 +650,11 @@ async def worker_loop():
     await refresh_products_map()
     logger.info("Worker started")
     
-    refresh_counter = 0
     while worker_running:
         try:
-            if refresh_counter >= 60:
-                await refresh_products_map()
-                refresh_counter = 0
             processed = await run_worker_once(limit=25)
             if processed > 0:
                 logger.info(f"Worker processed {processed} jobs")
-            refresh_counter += 1
         except Exception as e:
             logger.error(f"Worker error: {e}")
         

@@ -142,8 +142,7 @@ async def process_job(job: dict) -> None:
                         "municipio": endereco.get('municipio') or endereco.get('cidade'),
                         "cep": endereco.get('cep'),
                         "uf": endereco.get('uf')
-                    },
-                    "tipos": [1]
+                    }
                 }
                 contact_payload = {k: v for k, v in contact_payload.items() if v is not None}
                 if contact_payload.get('endereco'):

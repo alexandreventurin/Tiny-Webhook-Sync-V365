@@ -245,6 +245,24 @@ async def admin_failed_jobs_count():
     }
 
 
+@app.get("/admin/replication-status")
+async def admin_replication_status():
+    from app.db import count_orders_replicated_to_b
+    from app.settings import MAX_ORDERS_TO_REPLICATE, EXECUTE_TINY_B
+    
+    current_count = await count_orders_replicated_to_b()
+    limit = MAX_ORDERS_TO_REPLICATE
+    
+    return {
+        "ok": True,
+        "replicated_count": current_count,
+        "limit": limit,
+        "remaining": max(0, limit - current_count) if limit > 0 else "unlimited",
+        "limit_reached": current_count >= limit if limit > 0 else False,
+        "execute_tiny_b": EXECUTE_TINY_B
+    }
+
+
 @app.get("/admin/orders-a", response_model=OrderAListResponse)
 async def admin_orders_a(limit: int = 50):
     orders = await get_orders_a_list(limit=limit)

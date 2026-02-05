@@ -44,4 +44,4 @@ run = ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 5000"]
 TINY_A_TOKEN = "d505e2166ae55f5cf93740bae5b80dfe78772df30a4615046dcfc7357b0e3320"
 TINY_B_TOKEN = "1b608fe46e8ff2f14116cd4be53ca1b918343f84b1ac4ecad2695d40e04739cd"
 EXECUTE_TINY_B = "true"
-MAX_ORDERS_TO_REPLICATE = "5"
+MAX_ORDERS_TO_REPLICATE = "8"

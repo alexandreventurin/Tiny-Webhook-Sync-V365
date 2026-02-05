@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 
-APP_BUILD = "2026-01-30-002"
+APP_BUILD = "2026-02-05-001"
 
 from app.db import (
     init_db, close_db, insert_event, insert_job,
@@ -261,6 +261,55 @@ async def admin_replication_status():
         "limit_reached": current_count >= limit if limit > 0 else False,
         "execute_tiny_b": EXECUTE_TINY_B
     }
+
+
+@app.post("/admin/jobs/backfill")
+async def admin_backfill_jobs(limit: int = 100):
+    from app.db import get_pool
+    from app.utils import determine_job_type, generate_dedupe_key
+    
+    p = await get_pool()
+    async with p.acquire() as conn:
+        orphan_events = await conn.fetch("""
+            SELECT DISTINCT ON (e.venda_id) e.venda_id, e.codigo_situacao, e.id_nota_fiscal
+            FROM public.events e
+            WHERE e.source = 'A' 
+              AND e.topic = 'vendas'
+              AND e.codigo_situacao IN ('aberto', 'em_aberto', 'aprovado')
+              AND NOT EXISTS (
+                SELECT 1 FROM public.jobs j 
+                WHERE j.dedupe_key = 'A:vendas:' || e.venda_id || ':fetch_order_a'
+              )
+            ORDER BY e.venda_id, e.created_at DESC
+            LIMIT $1
+        """, limit)
+        
+        created = 0
+        for row in orphan_events:
+            venda_id = row['venda_id']
+            codigo_situacao = row['codigo_situacao']
+            id_nota_fiscal = row['id_nota_fiscal']
+            
+            job_type = "fetch_order_a"
+            dedupe_key = f"A:vendas:{venda_id}:fetch_order_a"
+            
+            job_payload = {
+                "source": "A",
+                "topic": "vendas",
+                "venda_id": str(venda_id),
+                "codigo_situacao": codigo_situacao,
+                "id_nota_fiscal": str(id_nota_fiscal) if id_nota_fiscal else None,
+                "from_backfill": True
+            }
+            
+            await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload)
+            created += 1
+        
+        return {
+            "ok": True,
+            "orphan_events_found": len(orphan_events),
+            "jobs_created": created
+        }
 
 
 @app.get("/admin/orders-a", response_model=OrderAListResponse)

@@ -55,6 +55,7 @@ app/
 - `POST /admin/jobs/retry-failed?job_type=create_order_b` - Reprocessar jobs falhos (opcional: filtrar por tipo)
 - `GET /admin/jobs/failed-count` - Conta jobs falhos por tipo
 - `GET /admin/replication-status` - Status da replicação (contador, limite, se atingiu limite)
+- `POST /admin/jobs/backfill?limit=100` - Cria jobs fetch_order_a para pedidos órfãos (eventos sem job)
 - `POST /admin/worker/run_once?limit=50` - Debug: run worker once with detailed results
 - `GET /admin/orders-a?limit=50` - List order snapshots
 - `GET /admin/orders-a/{venda_a_id}` - Get specific order snapshot

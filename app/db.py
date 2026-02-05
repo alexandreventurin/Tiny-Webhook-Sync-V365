@@ -485,7 +485,7 @@ async def get_orders_map_list(limit: int) -> list[dict]:
     p = await get_pool()
     async with p.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT external_key, venda_a_id, venda_b_id, order_id, created_at, updated_at
+            SELECT external_key, venda_a_id, venda_b_id, created_at, updated_at
             FROM public.orders_map
             ORDER BY updated_at DESC
             LIMIT $1

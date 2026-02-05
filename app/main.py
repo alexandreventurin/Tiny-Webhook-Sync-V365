@@ -266,7 +266,6 @@ async def admin_replication_status():
 @app.post("/admin/jobs/backfill")
 async def admin_backfill_jobs(limit: int = 100):
     from app.db import get_pool
-    from app.utils import determine_job_type, generate_dedupe_key
     
     p = await get_pool()
     async with p.acquire() as conn:

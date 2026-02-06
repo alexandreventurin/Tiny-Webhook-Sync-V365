@@ -427,7 +427,7 @@ async def process_job(job: dict) -> None:
                 ),
                 "observacoes": f"Repasse Tiny - origem id {order_data.get('id')} nº {order_data.get('numeroPedido')} {obs_extra}",
                 "valorFrete": float(str(order_data.get('valorFrete') or 0).replace(',', '.')),
-                "valorDesconto": float(str(order_data.get('valorDesconto') or 0).replace(',', '.'))
+                "valorDesconto": 0
             }
             if numero_pedido_ecommerce:
                 order_payload_b["ecommerce"] = {"id": 0, "numeroPedidoEcommerce": numero_pedido_ecommerce}

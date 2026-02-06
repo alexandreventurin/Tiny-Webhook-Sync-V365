@@ -387,7 +387,8 @@ async def process_job(job: dict) -> None:
             transportador_src = order_data.get('transportador') or {}
             forma_envio_obj = transportador_src.get('formaEnvio') or {}
             forma_envio_src = forma_envio_obj.get('nome')
-            forma_frete_src = forma_envio_obj.get('formaFrete')
+            forma_frete_obj = transportador_src.get('formaFrete') or {}
+            forma_frete_src = forma_frete_obj.get('nome') if isinstance(forma_frete_obj, dict) else forma_frete_obj
             codigo_rastreio = transportador_src.get('codigoRastreamento')
             url_rastreio = transportador_src.get('urlRastreamento')
             volumes_raw = transportador_src.get('volumes')

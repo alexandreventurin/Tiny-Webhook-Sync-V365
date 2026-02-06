@@ -37,6 +37,7 @@ app/
 - `EXECUTE_TINY_B`: Enable creating orders in Tiny B (default: false)
 - `ALLOW_VENDA_IDS`: Comma-separated allowlist of venda_ids (e.g., "30012,30013")
 - `FETCH_CACHE_MINUTES`: Cache duration for fetched orders (default: 10)
+- `JOB_DELAY_MINUTES`: Delay in minutes before processing fetch_order_a jobs, allows tracking data to populate (default: 0, recommended: 5)
 
 ## Endpoints
 

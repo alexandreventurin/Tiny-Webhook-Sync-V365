@@ -98,7 +98,9 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
         "id_nota_fiscal": id_nota_fiscal_str
     }
     
-    await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload)
+    from app.settings import JOB_DELAY_MINUTES
+    delay = JOB_DELAY_MINUTES if job_type == "fetch_order_a" else 0
+    await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload, delay_minutes=delay)
     
     return JSONResponse(content={"ok": True})
 

@@ -180,17 +180,25 @@ async def insert_event(
         return str(row["id"]) if row else None
 
 
-async def insert_job(job_type: str, dedupe_key: str, event_id: str | None, payload: dict | None = None) -> bool:
+async def insert_job(job_type: str, dedupe_key: str, event_id: str | None, payload: dict | None = None, delay_minutes: int = 0) -> bool:
     p = await get_pool()
     payload_str = json.dumps(payload) if payload else '{}'
     async with p.acquire() as conn:
         try:
-            result = await conn.execute("""
-                INSERT INTO public.jobs (job_type, dedupe_key, status, payload)
-                VALUES ($1::text, $2::text, 'queued', $3::jsonb)
-                ON CONFLICT (dedupe_key) DO UPDATE 
-                SET payload = COALESCE(NULLIF($3::jsonb, '{}'::jsonb), public.jobs.payload)
-            """, job_type, dedupe_key, payload_str)
+            if delay_minutes > 0:
+                result = await conn.execute("""
+                    INSERT INTO public.jobs (job_type, dedupe_key, status, payload, run_after)
+                    VALUES ($1::text, $2::text, 'queued', $3::jsonb, NOW() + ($4::int || ' minutes')::interval)
+                    ON CONFLICT (dedupe_key) DO UPDATE 
+                    SET payload = COALESCE(NULLIF($3::jsonb, '{}'::jsonb), public.jobs.payload)
+                """, job_type, dedupe_key, payload_str, delay_minutes)
+            else:
+                result = await conn.execute("""
+                    INSERT INTO public.jobs (job_type, dedupe_key, status, payload)
+                    VALUES ($1::text, $2::text, 'queued', $3::jsonb)
+                    ON CONFLICT (dedupe_key) DO UPDATE 
+                    SET payload = COALESCE(NULLIF($3::jsonb, '{}'::jsonb), public.jobs.payload)
+                """, job_type, dedupe_key, payload_str)
             return "INSERT" in result or "UPDATE" in result
         except Exception as e:
             logger.error(f"Failed to insert job: {e}")

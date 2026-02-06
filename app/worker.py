@@ -414,6 +414,7 @@ async def process_job(job: dict) -> None:
                 "itens": itens_b,
                 "enderecoEntrega": endereco_entrega,
                 "listaPreco": {"id": DEST1_PRICE_LIST_ID},
+                "vendedor": {"id": 963241122},
                 "transportador": build_transportador_v3(
                     forma_envio_origem=forma_envio_src,
                     forma_frete_origem=forma_frete_src,

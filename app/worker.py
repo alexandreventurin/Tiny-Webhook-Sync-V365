@@ -68,52 +68,56 @@ DEST1_FE_PAC_ID = 971399662
 DEST1_FE_ME_ID = 0
 DEST1_PRICE_LIST_ID = 915701964
 
+DEST1_FF_FM_STANDARD_ID = 971398494
+DEST1_FF_SEDEX_ID = 971399646
+DEST1_FF_PAC_ID = 971399707
+
 FORMA_ENVIO_MAP = {
     "FM Transportes": {
         "formaEnvioId": DEST1_FE_FM_ID,
         "fretePorConta": "R",
         "formaFreteMap": {
-            "Standard": "Standard",
-            "FMSTD": "Standard",
-            "EXPRESSO": "EXPRESSO",
-            "FMEXP": "EXPRESSO",
+            "Standard": {"id": DEST1_FF_FM_STANDARD_ID, "nome": "Standard"},
+            "FMSTD": {"id": DEST1_FF_FM_STANDARD_ID, "nome": "Standard"},
+            "EXPRESSO": {"id": DEST1_FF_FM_STANDARD_ID, "nome": "Standard"},
+            "FMEXP": {"id": DEST1_FF_FM_STANDARD_ID, "nome": "Standard"},
         },
-        "defaultFormaFrete": "Standard",
+        "defaultFormaFrete": {"id": DEST1_FF_FM_STANDARD_ID, "nome": "Standard"},
     },
     "Correios (Sedex)": {
         "formaEnvioId": DEST1_FE_SEDEX_ID,
         "fretePorConta": "R",
         "formaFreteMap": {
-            "SEDEX CONTRATO AG (03220)": "SEDEX CONTRATO AG (03220)",
-            "03220": "SEDEX CONTRATO AG (03220)",
-            "SEDEX 12 CONTRATO AG (03140)": "SEDEX 12 CONTRATO AG (03140)",
-            "03140": "SEDEX 12 CONTRATO AG (03140)",
-            "SEDEX 10 CONTRATO AG (03158)": "SEDEX 10 CONTRATO AG (03158)",
-            "03158": "SEDEX 10 CONTRATO AG (03158)",
-            "SEDEX HOJE CONTRATO AG (03204)": "SEDEX HOJE CONTRATO AG (03204)",
-            "03204": "SEDEX HOJE CONTRATO AG (03204)",
+            "SEDEX CONTRATO AG (03220)": {"id": DEST1_FF_SEDEX_ID, "nome": "SEDEX CONTRATO AG (03220)"},
+            "03220": {"id": DEST1_FF_SEDEX_ID, "nome": "SEDEX CONTRATO AG (03220)"},
+            "SEDEX 12 CONTRATO AG (03140)": {"id": DEST1_FF_SEDEX_ID, "nome": "SEDEX CONTRATO AG (03220)"},
+            "03140": {"id": DEST1_FF_SEDEX_ID, "nome": "SEDEX CONTRATO AG (03220)"},
+            "SEDEX 10 CONTRATO AG (03158)": {"id": DEST1_FF_SEDEX_ID, "nome": "SEDEX CONTRATO AG (03220)"},
+            "03158": {"id": DEST1_FF_SEDEX_ID, "nome": "SEDEX CONTRATO AG (03220)"},
+            "SEDEX HOJE CONTRATO AG (03204)": {"id": DEST1_FF_SEDEX_ID, "nome": "SEDEX CONTRATO AG (03220)"},
+            "03204": {"id": DEST1_FF_SEDEX_ID, "nome": "SEDEX CONTRATO AG (03220)"},
         },
-        "defaultFormaFrete": "SEDEX CONTRATO AG (03220)",
+        "defaultFormaFrete": {"id": DEST1_FF_SEDEX_ID, "nome": "SEDEX CONTRATO AG (03220)"},
     },
     "Correios (PAC)": {
         "formaEnvioId": DEST1_FE_PAC_ID,
         "fretePorConta": "R",
         "formaFreteMap": {
-            "PAC CONTRATO AG (03298)": "PAC CONTRATO AG (03298)",
-            "03298": "PAC CONTRATO AG (03298)",
-            "CORREIOS MINI ENVIOS CTR AG (04227)": "CORREIOS MINI ENVIOS CTR AG (04227)",
-            "04227": "CORREIOS MINI ENVIOS CTR AG (04227)",
+            "PAC CONTRATO AG (03298)": {"id": DEST1_FF_PAC_ID, "nome": "PAC CONTRATO AG (03298)"},
+            "03298": {"id": DEST1_FF_PAC_ID, "nome": "PAC CONTRATO AG (03298)"},
+            "CORREIOS MINI ENVIOS CTR AG (04227)": {"id": DEST1_FF_PAC_ID, "nome": "PAC CONTRATO AG (03298)"},
+            "04227": {"id": DEST1_FF_PAC_ID, "nome": "PAC CONTRATO AG (03298)"},
         },
-        "defaultFormaFrete": "PAC CONTRATO AG (03298)",
+        "defaultFormaFrete": {"id": DEST1_FF_PAC_ID, "nome": "PAC CONTRATO AG (03298)"},
     },
     "Mercado Envios": {
         "formaEnvioId": DEST1_FE_ME_ID if DEST1_FE_ME_ID else None,
         "fretePorConta": "R",
         "formaFreteMap": {
-            "PAC": "PAC",
-            "21": "PAC",
-            "Sedex": "Sedex",
-            "22": "Sedex",
+            "PAC": {"id": DEST1_FF_PAC_ID, "nome": "PAC CONTRATO AG (03298)"},
+            "21": {"id": DEST1_FF_PAC_ID, "nome": "PAC CONTRATO AG (03298)"},
+            "Sedex": {"id": DEST1_FF_SEDEX_ID, "nome": "SEDEX CONTRATO AG (03220)"},
+            "22": {"id": DEST1_FF_SEDEX_ID, "nome": "SEDEX CONTRATO AG (03220)"},
         },
         "defaultFormaFrete": None,
     },
@@ -146,8 +150,8 @@ def get_forma_envio_config(forma_envio_nome: str | None) -> dict:
     return {"formaEnvioId": None, "fretePorConta": "R", "formaFreteMap": {}, "defaultFormaFrete": None}
 
 
-def map_forma_frete(forma_envio_nome: str | None, forma_frete_origem: str | None) -> str | None:
-    """Mapeia a forma de frete de A para B."""
+def map_forma_frete(forma_envio_nome: str | None, forma_frete_origem: str | None) -> dict | None:
+    """Mapeia a forma de frete de A para B. Retorna dict {id, nome} ou None."""
     config = get_forma_envio_config(forma_envio_nome)
     frete_map = config.get("formaFreteMap", {})
     if forma_frete_origem and forma_frete_origem in frete_map:
@@ -218,8 +222,8 @@ def build_transportador_v3(
     forma_envio_id = config.get("formaEnvioId")
     if forma_envio_id:
         transportador["formaEnvio"] = {"id": forma_envio_id}
-    if forma_frete_dest:
-        transportador["formaFrete"] = {"nome": forma_frete_dest}
+    if forma_frete_dest and isinstance(forma_frete_dest, dict) and forma_frete_dest.get("id"):
+        transportador["formaFrete"] = forma_frete_dest
     
     logger.info(f"build_transportador_v3: forma_envio={forma_envio_origem}, forma_frete_origem={forma_frete_origem}, forma_frete_dest={forma_frete_dest}, volumes={volumes}")
     return transportador
@@ -432,6 +436,7 @@ async def process_job(job: dict) -> None:
                 order_payload_b["ecommerce"] = {"id": 0, "numeroPedidoEcommerce": numero_pedido_ecommerce}
             order_payload_b = {k: v for k, v in order_payload_b.items() if v is not None}
             
+            logger.info(f"create_order_b payload for venda {venda_id}: {json.dumps(order_payload_b, default=str)}")
             result = await client_b.create_order(order_payload_b)
             venda_b_id = str(result.get('id') or result.get('numeroPedido') or '')
             

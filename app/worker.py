@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timezone
 from typing import Any
@@ -254,17 +255,18 @@ async def process_job(job: dict) -> None:
                 logger.warning(f"Job {job_id} failed: missing_venda_id")
                 return
             
-            if MAX_ORDERS_TO_REPLICATE > 0:
+            max_orders = int(os.getenv("MAX_ORDERS_TO_REPLICATE", "0"))
+            if max_orders > 0:
                 current_count = await count_orders_replicated_to_b()
-                if current_count >= MAX_ORDERS_TO_REPLICATE:
+                if current_count >= max_orders:
                     action_preview = {
                         "would": "create_order_in_B",
                         "skipped": True,
-                        "reason": f"MAX_ORDERS_TO_REPLICATE limit reached ({current_count}/{MAX_ORDERS_TO_REPLICATE})",
+                        "reason": f"MAX_ORDERS_TO_REPLICATE limit reached ({current_count}/{max_orders})",
                         "venda_a_id": venda_id
                     }
                     await update_job_done(job_id, action_preview)
-                    logger.info(f"Job {job_id} skipped: MAX_ORDERS_TO_REPLICATE limit reached ({current_count}/{MAX_ORDERS_TO_REPLICATE})")
+                    logger.info(f"Job {job_id} skipped: MAX_ORDERS_TO_REPLICATE limit reached ({current_count}/{max_orders})")
                     return
             
             external_key = f"A:{venda_id}"

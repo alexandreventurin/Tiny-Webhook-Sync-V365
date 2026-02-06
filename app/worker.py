@@ -212,15 +212,14 @@ def build_transportador_v3(
         "fretePorConta": config.get("fretePorConta", "R"),
         "codigoRastreamento": codigo_rastreio or "",
         "urlRastreamento": url_rastreio or "",
-        "volumes": volumes,
+        "volumes": max(1, volumes),
     }
     
     forma_envio_id = config.get("formaEnvioId")
     if forma_envio_id:
-        forma_envio_obj = {"id": forma_envio_id}
-        if forma_frete_dest:
-            forma_envio_obj["formaFrete"] = forma_frete_dest
-        transportador["formaEnvio"] = forma_envio_obj
+        transportador["formaEnvio"] = {"id": forma_envio_id}
+    if forma_frete_dest:
+        transportador["formaFrete"] = {"nome": forma_frete_dest}
     
     logger.info(f"build_transportador_v3: forma_envio={forma_envio_origem}, forma_frete_origem={forma_frete_origem}, forma_frete_dest={forma_frete_dest}, volumes={volumes}")
     return transportador

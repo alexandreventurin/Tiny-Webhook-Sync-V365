@@ -88,6 +88,10 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
         return JSONResponse(content={"ok": True, "status": "ignored", "reason": "missing_venda_id_and_id_nota_fiscal"})
     
     job_type = determine_job_type(source, topic, codigo_situacao_str)
+    
+    if job_type == "noop":
+        return JSONResponse(content={"ok": True, "status": "ignored", "reason": f"noop for {source}/{topic}/{codigo_situacao_str}"})
+    
     dedupe_key = generate_dedupe_key(source, topic, venda_id_int, job_type)
     
     job_payload = {
@@ -98,9 +102,7 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
         "id_nota_fiscal": id_nota_fiscal_str
     }
     
-    from app.settings import JOB_DELAY_MINUTES
-    delay = JOB_DELAY_MINUTES if job_type == "fetch_order_a" else 0
-    await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload, delay_minutes=delay)
+    await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload, delay_minutes=0)
     
     return JSONResponse(content={"ok": True})
 
@@ -276,7 +278,7 @@ async def admin_backfill_jobs(limit: int = 100):
             FROM public.events e
             WHERE e.source = 'A' 
               AND e.topic = 'vendas'
-              AND e.codigo_situacao IN ('aberto', 'em_aberto', 'aprovado')
+              AND e.codigo_situacao IN ('aprovado')
               AND NOT EXISTS (
                 SELECT 1 FROM public.jobs j 
                 WHERE j.dedupe_key = 'A:vendas:' || e.venda_id || ':fetch_order_a'

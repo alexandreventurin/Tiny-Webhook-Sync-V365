@@ -71,7 +71,7 @@ def determine_job_type(source: str, topic: str, codigo_situacao) -> str:
     status = normalize_status(codigo_situacao)
     
     if source == "A" and topic == "vendas":
-        if status in ("aberto", "em_aberto", "aprovado"):
+        if status == "aprovado":
             return "fetch_order_a"
         if status in ("pronto_envio", "entregue"):
             return "sync_status"

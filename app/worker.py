@@ -17,6 +17,8 @@ from app.db import (
     upsert_orders_map_with_b,
     get_order_a_snapshot,
     get_snapshot_fetched_at,
+    get_order_mapping_by_a,
+    get_order_mapping_by_b,
     insert_job,
     reset_stale_locks,
     count_orders_replicated_to_b,
@@ -561,17 +563,62 @@ async def process_job(job: dict) -> None:
             logger.info(f"Chained create_order_b job for venda {venda_id}")
         
         elif job_type == 'sync_status':
+            SITUACAO_CODE = {
+                "faturado": 1,
+                "cancelado": 2,
+                "enviado": 5,
+                "entregue": 6,
+            }
+            
+            situacao_int = SITUACAO_CODE.get(codigo_situacao)
+            if not situacao_int:
+                action_preview = {"would": "sync_status", "skipped": True, "reason": f"unknown situacao '{codigo_situacao}'"}
+                await update_job_done(job_id, action_preview)
+                logger.warning(f"sync_status: unknown situacao '{codigo_situacao}' for venda {venda_id}")
+                return
+            
+            if source == "A":
+                mapping = await get_order_mapping_by_a(str(venda_id))
+                if not mapping:
+                    raise Exception(f"No orders_map entry for venda_a_id={venda_id}")
+                target_id = str(mapping["venda_b_id"])
+                target_source = "B"
+                target_token = await ensure_access_token("B")
+            elif source == "B":
+                mapping = await get_order_mapping_by_b(str(venda_id))
+                if not mapping:
+                    raise Exception(f"No orders_map entry for venda_b_id={venda_id}")
+                target_id = str(mapping["venda_a_id"])
+                target_source = "A"
+                target_token = await ensure_access_token("A")
+            else:
+                raise Exception(f"sync_status: unknown source '{source}'")
+            
+            logger.info(f"sync_status: {source} venda {venda_id} -> {target_source} venda {target_id}, situacao={codigo_situacao} ({situacao_int})")
+            
+            if not target_token:
+                action_preview = {"would": "sync_status", "skipped": True, "reason": f"token for {target_source} not available"}
+                await update_job_done(job_id, action_preview)
+                logger.warning(f"sync_status: token for {target_source} not available")
+                return
+            
+            client_target = TinyClient(target_token)
+            
+            await client_target.update_order_status(target_id, situacao_int)
+            
             action_preview = {
                 "would": "sync_status",
+                "done": True,
                 "source": source,
-                "topic": topic,
-                "venda_id": venda_id,
-                "codigo_situacao": codigo_situacao,
-                "id_nota_fiscal": id_nota_fiscal
+                "venda_id": str(venda_id),
+                "target_source": target_source,
+                "target_venda_id": target_id,
+                "situacao": codigo_situacao,
+                "situacao_code": situacao_int,
             }
             
             await update_job_done(job_id, action_preview)
-            logger.info(f"Job {job_id} completed: sync_status")
+            logger.info(f"Job {job_id} completed: sync_status {source}:{venda_id} -> {target_source}:{target_id} = {codigo_situacao}")
         
         elif job_type == 'sync_nf_link':
             url_danfe = payload.get('url_danfe')

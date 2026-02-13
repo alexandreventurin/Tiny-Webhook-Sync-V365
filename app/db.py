@@ -501,6 +501,28 @@ async def get_orders_map_list(limit: int) -> list[dict]:
         return [dict(row) for row in rows]
 
 
+async def get_order_mapping_by_a(venda_a_id: str) -> dict | None:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT external_key, venda_a_id, venda_b_id
+            FROM public.orders_map
+            WHERE venda_a_id = $1 AND venda_b_id IS NOT NULL
+        """, venda_a_id)
+        return dict(row) if row else None
+
+
+async def get_order_mapping_by_b(venda_b_id: str) -> dict | None:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT external_key, venda_a_id, venda_b_id
+            FROM public.orders_map
+            WHERE venda_b_id::text = $1
+        """, venda_b_id)
+        return dict(row) if row else None
+
+
 async def count_orders_replicated_to_b() -> int:
     """Conta quantos pedidos foram replicados para B (orders_map com venda_b_id preenchido)."""
     p = await get_pool()

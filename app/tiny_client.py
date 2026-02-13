@@ -99,6 +99,14 @@ class TinyClient:
             data = response.json()
             return data.get("itens", [])
     
+    async def update_order_status(self, pedido_id: str, situacao: int) -> None:
+        url = f"{self._base_url}/pedidos/{pedido_id}/situacao"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.put(url, headers=self._headers(), json={"situacao": situacao})
+            if response.status_code not in (200, 204):
+                raise TinyApiError(response.status_code, response.text, url)
+        logger.info(f"Updated order {pedido_id} to situacao {situacao}")
+    
     async def list_all_products(self, limit: int = 100) -> list:
         url = f"{self._base_url}/produtos"
         all_products = []

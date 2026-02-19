@@ -543,6 +543,65 @@ async def admin_set_flag(request: Request):
     return {"ok": ok, "key": key, "enabled": enabled}
 
 
+@app.get("/admin/jobs-dashboard")
+async def admin_jobs_dashboard(limit: int = 10, status: str | None = None, job_type: str | None = None):
+    from app.db import get_pool
+    limit = min(limit, 50)
+    p = await get_pool()
+    async with p.acquire() as conn:
+        query = "SELECT id, job_type, status, created_at, updated_at, action_preview, last_error, attempts FROM public.jobs"
+        conditions = []
+        args = []
+        idx = 1
+        if status:
+            conditions.append(f"status = ${idx}")
+            args.append(status)
+            idx += 1
+        if job_type:
+            conditions.append(f"job_type = ${idx}")
+            args.append(job_type)
+            idx += 1
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += f" ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ${idx}"
+        args.append(limit)
+        rows = await conn.fetch(query, *args)
+        jobs = []
+        for r in rows:
+            d = dict(r)
+            for k in ("created_at", "updated_at"):
+                if d.get(k) and hasattr(d[k], "isoformat"):
+                    d[k] = d[k].isoformat()
+            if d.get("action_preview") and not isinstance(d["action_preview"], (dict, list)):
+                try:
+                    d["action_preview"] = json.loads(str(d["action_preview"]))
+                except Exception:
+                    pass
+            jobs.append(d)
+        return {"jobs": jobs}
+
+
+@app.get("/admin/events")
+async def admin_events(limit: int = 5):
+    from app.db import get_pool
+    limit = min(limit, 50)
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id, source, topic, venda_id, codigo_situacao, id_nota_fiscal, created_at
+            FROM public.events
+            ORDER BY created_at DESC
+            LIMIT $1
+        """, limit)
+        events = []
+        for r in rows:
+            d = dict(r)
+            if d.get("created_at"):
+                d["created_at"] = d["created_at"].isoformat()
+            events.append(d)
+        return {"events": events}
+
+
 @app.get("/admin/dashboard")
 async def admin_dashboard():
     from app.db import get_dashboard_data

@@ -522,21 +522,8 @@ async def process_job(job: dict) -> None:
             
             token_a = await ensure_access_token("A")
             if not token_a:
-                action_preview = {
-                    "would": "fetch_order_a",
-                    "venda_a_id": venda_id,
-                    "skipped": True,
-                    "reason": "No valid OAuth token for account A"
-                }
-                await update_job_done(job_id, action_preview)
-                logger.warning(f"Job {job_id} skipped: No OAuth token for A")
-                create_order_dedupe_key = f"A:vendas:{venda_id}:create_order_b"
-                create_order_payload = {
-                    "source": "A", "topic": "vendas", "venda_id": str(venda_id),
-                    "codigo_situacao": codigo_situacao, "id_nota_fiscal": id_nota_fiscal,
-                    "from_fetch_order_a": True
-                }
-                await insert_job(job_type="create_order_b", dedupe_key=create_order_dedupe_key, event_id=None, payload=create_order_payload)
+                await update_job_failed(job_id, "No valid OAuth token for account A", attempts)
+                logger.warning(f"Job {job_id} failed: No OAuth token for A (will retry)")
                 return
             
             client_a = TinyClient(token_a)

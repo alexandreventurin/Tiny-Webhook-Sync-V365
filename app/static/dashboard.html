@@ -67,7 +67,26 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .auto-refresh{font-size:11px;color:#888;display:flex;align-items:center;gap:4px}
 .auto-refresh .dot{width:6px;height:6px;border-radius:50%;background:#22c55e;display:inline-block}
 .empty-state{text-align:center;padding:24px;color:#aaa;font-size:14px}
-@media(max-width:600px){.container{padding:12px}.stats{grid-template-columns:repeat(2,1fr)}.header{flex-direction:column;gap:8px;text-align:center}.jobs-table{font-size:11px}}
+.auth-bar{display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.auth-card{flex:1;min-width:200px;border-radius:10px;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.auth-card.ok{background:#f0fdf4;border:1px solid #bbf7d0}
+.auth-card.expired{background:#fef2f2;border:1px solid #fecaca}
+.auth-card.missing{background:#f5f5f5;border:1px solid #e5e5e5}
+.auth-card .auth-left{display:flex;align-items:center;gap:10px}
+.auth-card .auth-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.auth-card.ok .auth-dot{background:#22c55e}
+.auth-card.expired .auth-dot{background:#ef4444}
+.auth-card.missing .auth-dot{background:#aaa}
+.auth-card .auth-name{font-size:14px;font-weight:600;color:#333}
+.auth-card .auth-detail{font-size:11px;color:#888;margin-top:2px}
+.auth-card .auth-link{font-size:12px;font-weight:500;padding:5px 12px;border-radius:6px;text-decoration:none;white-space:nowrap;transition:background .2s}
+.auth-card.ok .auth-link{background:#dcfce7;color:#166534}
+.auth-card.ok .auth-link:hover{background:#bbf7d0}
+.auth-card.expired .auth-link{background:#ef4444;color:#fff}
+.auth-card.expired .auth-link:hover{background:#dc2626}
+.auth-card.missing .auth-link{background:#3b82f6;color:#fff}
+.auth-card.missing .auth-link:hover{background:#2563eb}
+@media(max-width:600px){.container{padding:12px}.stats{grid-template-columns:repeat(2,1fr)}.header{flex-direction:column;gap:8px;text-align:center}.jobs-table{font-size:11px}.auth-bar{flex-direction:column}}
 </style>
 </head>
 <body>
@@ -82,6 +101,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   </div>
 </div>
 <div class="container">
+  <div class="auth-bar" id="authBar">
+    <div class="auth-card missing"><div class="auth-left"><div class="auth-dot"></div><div><div class="auth-name">Carregando...</div></div></div></div>
+  </div>
+
   <div class="stats" id="statsGrid"></div>
 
   <div class="section">
@@ -174,6 +197,42 @@ function previewText(job) {
 
 function escHtml(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 function truncate(s, n) { return s && s.length > n ? s.substring(0, n) + '...' : s || ''; }
+
+async function loadAuth() {
+  try {
+    const res = await fetch(API + '/admin/tokens');
+    const data = await res.json();
+    const bar = document.getElementById('authBar');
+    const accounts = {A: null, B: null};
+    (data.tokens || []).forEach(t => { accounts[t.account] = t; });
+    const labels = {A: 'Tiny A (Rejuderme)', B: 'Tiny B (Muy Bela)'};
+    const authPaths = {A: '/auth/a/start', B: '/auth/b/start'};
+    bar.innerHTML = ['A','B'].map(acc => {
+      const t = accounts[acc];
+      if (!t) {
+        return `<div class="auth-card missing"><div class="auth-left"><div class="auth-dot"></div><div><div class="auth-name">${labels[acc]}</div><div class="auth-detail">Nenhum token cadastrado</div></div></div><a href="${authPaths[acc]}" class="auth-link" target="_blank">Conectar</a></div>`;
+      }
+      const now = new Date();
+      const expires = t.expires_at ? new Date(t.expires_at) : null;
+      const valid = expires && expires > now;
+      const cls = valid ? 'ok' : 'expired';
+      const statusText = valid ? 'Conectado' : 'Expirado';
+      let detail;
+      if (valid) {
+        const remaining = Math.floor((expires - now) / 1000);
+        if (remaining < 3600) detail = 'Expira em ' + Math.floor(remaining/60) + 'min';
+        else if (remaining < 86400) detail = 'Expira em ' + Math.floor(remaining/3600) + 'h';
+        else detail = 'Expira em ' + Math.floor(remaining/86400) + 'd';
+      } else {
+        detail = expires ? 'Expirou ' + timeAgo(expires.toISOString()) : 'Token expirado';
+      }
+      const linkText = valid ? 'Reconectar' : 'Reconectar agora';
+      return `<div class="auth-card ${cls}"><div class="auth-left"><div class="auth-dot"></div><div><div class="auth-name">${labels[acc]}</div><div class="auth-detail">${statusText} &middot; ${detail}</div></div></div><a href="${authPaths[acc]}" class="auth-link" target="_blank">${linkText}</a></div>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('authBar').innerHTML = '<div class="auth-card missing"><div class="auth-left"><div class="auth-dot"></div><div><div class="auth-name">Erro ao verificar tokens</div></div></div></div>';
+  }
+}
 
 async function loadFlags() {
   try {
@@ -269,7 +328,7 @@ async function refresh() {
   const btn = document.getElementById('refreshBtn');
   btn.classList.add('loading');
   btn.textContent = 'Atualizando...';
-  await Promise.all([loadFlags(), loadDashboard()]);
+  await Promise.all([loadAuth(), loadFlags(), loadDashboard()]);
   btn.classList.remove('loading');
   btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg> Atualizar';
   resetAutoRefresh();
@@ -278,6 +337,7 @@ async function refresh() {
 function resetAutoRefresh() {
   if (autoRefreshTimer) clearInterval(autoRefreshTimer);
   autoRefreshTimer = setInterval(() => {
+    loadAuth();
     loadFlags();
     loadDashboard();
   }, 60000);

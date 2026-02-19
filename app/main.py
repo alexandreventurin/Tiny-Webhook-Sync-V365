@@ -508,6 +508,10 @@ async def admin_tiny_b_ping(venda_id: str):
 async def admin_tokens():
     from app.tiny_oauth import list_token_status
     tokens = await list_token_status()
+    for t in tokens:
+        for k in ("expires_at", "updated_at"):
+            if t.get(k) and hasattr(t[k], "isoformat"):
+                t[k] = t[k].isoformat()
     return {"tokens": tokens}
 
 

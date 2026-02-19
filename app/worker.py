@@ -23,7 +23,8 @@ from app.db import (
     reset_stale_locks,
     count_orders_replicated_to_b,
     load_products_map,
-    get_feature_flag
+    get_feature_flag,
+    update_orders_map_sync
 )
 from app.settings import (
     TINY_A_TOKEN, TINY_B_TOKEN, 
@@ -606,6 +607,11 @@ async def process_job(job: dict) -> None:
             client_target = TinyClient(target_token)
             
             await client_target.update_order_status(target_id, situacao_int)
+            
+            if source == "A":
+                await update_orders_map_sync(str(venda_id), target_id, codigo_situacao)
+            else:
+                await update_orders_map_sync(target_id, str(venda_id), codigo_situacao)
             
             action_preview = {
                 "would": "sync_status",

@@ -133,6 +133,20 @@ async def init_db():
             """)
             
             try:
+                await conn.execute("ALTER TABLE public.orders_map ADD COLUMN IF NOT EXISTS last_sync_status TEXT")
+            except Exception:
+                pass
+            try:
+                await conn.execute("ALTER TABLE public.orders_map ADD COLUMN IF NOT EXISTS last_sync_at TIMESTAMPTZ")
+            except Exception:
+                pass
+
+            try:
+                await conn.execute("ALTER TABLE public.events ADD COLUMN IF NOT EXISTS action_result TEXT")
+            except Exception:
+                pass
+
+            try:
                 await conn.execute("ALTER TABLE public.orders_a_snapshot ADD COLUMN IF NOT EXISTS last_error JSONB")
             except Exception:
                 pass
@@ -543,6 +557,57 @@ async def get_order_mapping_by_b(venda_b_id: str) -> dict | None:
             WHERE venda_b_id::text = $1
         """, venda_b_id)
         return dict(row) if row else None
+
+
+async def update_orders_map_sync(venda_a_id: str, venda_b_id: str, sync_status: str) -> None:
+    """Atualiza last_sync_status e last_sync_at no orders_map após sync_status executar."""
+    p = await get_pool()
+    async with p.acquire() as conn:
+        try:
+            await conn.execute("""
+                UPDATE public.orders_map
+                SET last_sync_status = $3, last_sync_at = NOW(), updated_at = NOW()
+                WHERE venda_a_id::text = $1 OR venda_b_id::text = $2
+            """, venda_a_id, venda_b_id, sync_status)
+        except Exception as e:
+            logger.error(f"Failed to update orders_map sync: {e}")
+
+
+async def check_is_echo(source: str, venda_id: str, codigo_situacao: str) -> bool:
+    """Verifica se um webhook é eco de um sync_status recente (últimos 5 minutos)."""
+    p = await get_pool()
+    async with p.acquire() as conn:
+        if source == "A":
+            row = await conn.fetchrow("""
+                SELECT last_sync_status, last_sync_at FROM public.orders_map
+                WHERE venda_a_id::text = $1
+                  AND last_sync_status = $2
+                  AND last_sync_at > NOW() - INTERVAL '5 minutes'
+            """, venda_id, codigo_situacao)
+        elif source == "B":
+            row = await conn.fetchrow("""
+                SELECT last_sync_status, last_sync_at FROM public.orders_map
+                WHERE venda_b_id::text = $1
+                  AND last_sync_status = $2
+                  AND last_sync_at > NOW() - INTERVAL '5 minutes'
+            """, venda_id, codigo_situacao)
+        else:
+            return False
+        return row is not None
+
+
+async def update_event_action_result(event_id: str, action_result: str) -> None:
+    """Atualiza o action_result de um evento."""
+    p = await get_pool()
+    async with p.acquire() as conn:
+        try:
+            import uuid
+            uid = uuid.UUID(event_id) if isinstance(event_id, str) else event_id
+            await conn.execute("""
+                UPDATE public.events SET action_result = $2 WHERE id = $1
+            """, uid, action_result)
+        except Exception as e:
+            logger.error(f"Failed to update event action_result: {e}")
 
 
 async def count_orders_replicated_to_b() -> int:

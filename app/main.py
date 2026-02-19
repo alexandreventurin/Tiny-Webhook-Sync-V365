@@ -16,7 +16,8 @@ from app.db import (
     init_db, close_db, insert_event, insert_job,
     get_events_count, get_jobs_count_by_status,
     get_jobs_list, get_last_event_at, get_last_job_done_at,
-    get_orders_a_list, get_order_a_snapshot, get_orders_map_list
+    get_orders_a_list, get_order_a_snapshot, get_orders_map_list,
+    check_is_echo, update_event_action_result
 )
 from app.schemas import (
     WebhookResponse, HealthResponse, JobsListResponse, JobItem, RunJobsResponse,
@@ -49,6 +50,7 @@ async def root():
 
 
 async def process_webhook(request: Request, source: str, topic: str) -> JSONResponse:
+    logger = logging.getLogger(__name__)
     payload = await request.json()
     
     dados = payload.get("dados") or {}
@@ -75,7 +77,7 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
         payload=payload
     )
     
-    await insert_event(
+    event_id = await insert_event(
         event_key=event_key,
         source=source,
         topic=topic,
@@ -86,12 +88,24 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
     )
     
     if source == "B" and topic == "notas" and venda_id_int is None and id_nota_fiscal_int is None:
+        if event_id:
+            await update_event_action_result(event_id, "noop")
         return JSONResponse(content={"ok": True, "status": "ignored", "reason": "missing_venda_id_and_id_nota_fiscal"})
     
     job_type = determine_job_type(source, topic, codigo_situacao_str)
     
     if job_type == "noop":
+        if event_id:
+            await update_event_action_result(event_id, "noop")
         return JSONResponse(content={"ok": True, "status": "ignored", "reason": f"noop for {source}/{topic}/{codigo_situacao_str}"})
+    
+    if job_type == "sync_status" and venda_id_int and codigo_situacao_str:
+        is_echo = await check_is_echo(source, str(venda_id_int), codigo_situacao_str)
+        if is_echo:
+            if event_id:
+                await update_event_action_result(event_id, "echo")
+            logger.info(f"Echo detected: {source} venda {venda_id_int} {codigo_situacao_str} (ignored)")
+            return JSONResponse(content={"ok": True, "status": "ignored", "reason": "echo"})
     
     dedupe_key = generate_dedupe_key(source, topic, venda_id_int, job_type)
     
@@ -104,6 +118,9 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
     }
     
     await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload, delay_minutes=0)
+    
+    if event_id:
+        await update_event_action_result(event_id, f"job:{job_type}")
     
     return JSONResponse(content={"ok": True})
 
@@ -588,7 +605,7 @@ async def admin_events(limit: int = 5):
     p = await get_pool()
     async with p.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT id, source, topic, venda_id, codigo_situacao, id_nota_fiscal, created_at
+            SELECT id, source, topic, venda_id, codigo_situacao, id_nota_fiscal, created_at, action_result
             FROM public.events
             ORDER BY created_at DESC
             LIMIT $1

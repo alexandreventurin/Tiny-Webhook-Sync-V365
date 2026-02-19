@@ -55,6 +55,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .tag-enviados{background:#d1fae5;color:#065f46}
 .ev-time{font-size:12px;color:#888}
 .ev-detail{font-size:13px;color:#555}
+.ev-spacer{flex:1}
+.ev-action{font-size:10px;padding:2px 8px;border-radius:4px;font-weight:500;white-space:nowrap;flex-shrink:0}
+.ev-action.act-job{background:#d1fae5;color:#065f46}
+.ev-action.act-echo{background:#fef3c7;color:#92400e}
+.ev-action.act-noop{background:#f3f4f6;color:#9ca3af}
 .jobs-table{width:100%;border-collapse:collapse;font-size:13px}
 .jobs-table th{text-align:left;padding:8px 10px;border-bottom:2px solid #eee;color:#888;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
 .jobs-table td{padding:8px 10px;border-bottom:1px solid #f3f4f6;vertical-align:top}
@@ -212,6 +217,23 @@ function statusBadge(status) {
   return `<span class="status-badge status-${status}">${status}</span>`;
 }
 
+function actionBadge(action_result) {
+  if (!action_result) return '';
+  if (action_result === 'echo') return '<span class="ev-action act-echo">Eco</span>';
+  if (action_result === 'noop') return '<span class="ev-action act-noop">Ignorado</span>';
+  if (action_result.startsWith('job:')) {
+    const jt = action_result.replace('job:', '');
+    const labels = {
+      'fetch_order_a': 'Buscar A',
+      'create_order_b': 'Criar B',
+      'sync_status': 'Sync Status',
+      'sync_nf_link': 'Sync NF',
+    };
+    return `<span class="ev-action act-job">\u2192 ${labels[jt] || jt}</span>`;
+  }
+  return `<span class="ev-action act-noop">${escHtml(action_result)}</span>`;
+}
+
 function previewText(job) {
   if (job.last_error && (job.status === 'failed' || job.status === 'dead')) {
     return `<span class="job-error" title="${escHtml(job.last_error)}">${escHtml(truncate(job.last_error, 60))}</span>`;
@@ -328,7 +350,9 @@ async function loadEvents() {
         ${ev.venda_id ? `<span class="ev-detail">Venda #${ev.venda_id}</span>` : ''}
         ${ev.codigo_situacao ? `<span class="tag">${escHtml(ev.codigo_situacao)}</span>` : ''}
         ${ev.id_nota_fiscal ? `<span class="ev-detail">NF #${ev.id_nota_fiscal}</span>` : ''}
+        <span class="ev-spacer"></span>
         <span class="ev-time">${timeAgo(ev.created_at)}</span>
+        ${actionBadge(ev.action_result)}
       </div>
     `).join('');
   } catch(e) {

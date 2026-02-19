@@ -4,8 +4,9 @@ import logging
 import sys
 from contextlib import asynccontextmanager
 
+from pathlib import Path
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 
@@ -508,6 +509,52 @@ async def admin_tokens():
     from app.tiny_oauth import list_token_status
     tokens = await list_token_status()
     return {"tokens": tokens}
+
+
+@app.get("/dashboard")
+async def dashboard():
+    html_path = Path(__file__).parent / "static" / "dashboard.html"
+    return HTMLResponse(content=html_path.read_text(encoding="utf-8"), headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/admin/flags")
+async def admin_get_flags():
+    from app.db import get_all_feature_flags
+    flags = await get_all_feature_flags()
+    for f in flags:
+        if f.get('updated_at'):
+            f['updated_at'] = f['updated_at'].isoformat()
+    return {"flags": flags}
+
+
+@app.post("/admin/flags")
+async def admin_set_flag(request: Request):
+    from app.db import set_feature_flag
+    body = await request.json()
+    key = body.get("key")
+    enabled = body.get("enabled", False)
+    if not key:
+        return JSONResponse(status_code=400, content={"error": "missing key"})
+    ok = await set_feature_flag(key, enabled)
+    return {"ok": ok, "key": key, "enabled": enabled}
+
+
+@app.get("/admin/dashboard")
+async def admin_dashboard():
+    from app.db import get_dashboard_data
+    data = await get_dashboard_data()
+    if data.get("last_event") and data["last_event"].get("created_at"):
+        data["last_event"]["created_at"] = data["last_event"]["created_at"].isoformat()
+    for j in data.get("recent_jobs", []):
+        for k in ("created_at", "updated_at"):
+            if j.get(k):
+                j[k] = j[k].isoformat()
+        if j.get("action_preview") and not isinstance(j["action_preview"], (dict, list)):
+            try:
+                j["action_preview"] = json.loads(str(j["action_preview"]))
+            except Exception:
+                pass
+    return data
 
 
 @app.get("/auth/a/start")

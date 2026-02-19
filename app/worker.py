@@ -22,7 +22,8 @@ from app.db import (
     insert_job,
     reset_stale_locks,
     count_orders_replicated_to_b,
-    load_products_map
+    load_products_map,
+    get_feature_flag
 )
 from app.settings import (
     TINY_A_TOKEN, TINY_B_TOKEN, 
@@ -255,6 +256,12 @@ async def process_job(job: dict) -> None:
     
     try:
         if job_type == 'create_order_b':
+            if not await get_feature_flag("replicate_orders"):
+                action_preview = {"would": "create_order_in_B", "skipped": True, "reason": "replicate_orders flag disabled"}
+                await update_job_done(job_id, action_preview)
+                logger.info(f"Job {job_id} skipped: replicate_orders flag disabled")
+                return
+
             if not venda_id:
                 await update_job_failed(job_id, "missing_venda_id", attempts)
                 logger.warning(f"Job {job_id} failed: missing_venda_id")
@@ -563,6 +570,13 @@ async def process_job(job: dict) -> None:
             logger.info(f"Chained create_order_b job for venda {venda_id}")
         
         elif job_type == 'sync_status':
+            flag_key = f"sync_status_{codigo_situacao}" if codigo_situacao else None
+            if flag_key and not await get_feature_flag(flag_key):
+                action_preview = {"would": "sync_status", "skipped": True, "reason": f"{flag_key} flag disabled", "situacao": codigo_situacao}
+                await update_job_done(job_id, action_preview)
+                logger.info(f"Job {job_id} skipped: {flag_key} flag disabled")
+                return
+
             SITUACAO_CODE = {
                 "faturado": 1,
                 "cancelado": 2,
@@ -621,6 +635,12 @@ async def process_job(job: dict) -> None:
             logger.info(f"Job {job_id} completed: sync_status {source}:{venda_id} -> {target_source}:{target_id} = {codigo_situacao}")
         
         elif job_type == 'sync_nf_link':
+            if not await get_feature_flag("sync_nf_link"):
+                action_preview = {"would": "sync_nf_link", "skipped": True, "reason": "sync_nf_link flag disabled"}
+                await update_job_done(job_id, action_preview)
+                logger.info(f"Job {job_id} skipped: sync_nf_link flag disabled")
+                return
+
             url_danfe = payload.get('url_danfe')
             action_preview = {
                 "would": "sync_nf_link",

@@ -15,7 +15,9 @@ app/
 ├── schemas.py      # Pydantic models
 ├── utils.py        # Helper functions (hashing, key generation)
 ├── worker.py       # Job worker and processing logic
-└── tiny_client.py  # HTTP client for Tiny API
+├── tiny_client.py  # HTTP client for Tiny API
+└── static/
+    └── dashboard.html  # Dashboard UI (controles + atividade)
 ```
 
 ## Environment Variables
@@ -48,9 +50,15 @@ app/
 - `POST /webhooks/b/notas_fiscais` - Webhook for source B fiscal notes
 - `POST /webhooks/b/enviados` - Webhook for source B shipments
 
+### Dashboard
+- `GET /dashboard` - Painel visual com controles (liga/desliga) e atividade em tempo real
+
 ### Admin
 - `GET /health` - Health check with metrics
 - `GET /admin/runtime` - Returns APP_BUILD and WORKER_BUILD versions
+- `GET /admin/flags` - Lista feature flags (controles do dashboard)
+- `POST /admin/flags` - Liga/desliga uma feature flag `{"key":"...", "enabled":true/false}`
+- `GET /admin/dashboard` - Dados do dashboard (stats, last event, recent jobs)
 - `GET /admin/jobs?status=queued&limit=50` - List jobs by status
 - `POST /admin/jobs/run?limit=50` - Manual job processing round
 - `POST /admin/jobs/retry-failed?job_type=create_order_b` - Reprocessar jobs falhos (opcional: filtrar por tipo)
@@ -85,6 +93,17 @@ app/
 - `public.orders_a_snapshot` - Stores webhook and fetched payloads from Tiny A (includes last_error, needs_fetch)
 - `public.tiny_tokens` - OAuth tokens for accounts A/B (access_token, refresh_token, expires_at)
 - `public.products_map` - Mapeamento de produtos A -> B (editável pelo João no Supabase)
+- `public.feature_flags` - Controles liga/desliga das funções (dashboard)
+
+## Feature Flags (Dashboard Controls)
+| Flag Key | Label | Descrição | Funcional |
+|----------|-------|-----------|-----------|
+| `replicate_orders` | Replicar Pedidos | Cria pedidos em B quando A é aprovado | Sim |
+| `sync_status_enviado` | Sync Enviado | Espelha status enviado de A para B | Sim |
+| `sync_status_entregue` | Sync Entregue | Espelha status entregue de A para B | Sim |
+| `sync_status_cancelado` | Sync Cancelado | Espelha status cancelado entre A e B | Sim |
+| `sync_status_faturado` | Sync Faturado | Espelha status faturado de B para A | Sim |
+| `sync_nf_link` | Enviar NF | Envia link da NF de B para A | Não (em breve) |
 
 ## Job Flow
 

@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tiny Integrator - Painel</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f5f7fa;color:#333;min-height:100vh}
+.header{background:#1a1a2e;color:#fff;padding:16px 24px;display:flex;align-items:center;justify-content:space-between}
+.header h1{font-size:18px;font-weight:600}
+.header .meta{font-size:12px;opacity:.7;display:flex;gap:16px;align-items:center}
+.refresh-btn{background:#3a3a5e;border:none;color:#fff;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:6px;transition:background .2s}
+.refresh-btn:hover{background:#4a4a7e}
+.refresh-btn.loading{opacity:.6;pointer-events:none}
+.container{max-width:960px;margin:0 auto;padding:20px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:24px}
+.stat{background:#fff;border-radius:10px;padding:16px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.stat .value{font-size:28px;font-weight:700;color:#1a1a2e}
+.stat .label{font-size:12px;color:#888;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
+.stat.green .value{color:#22c55e}
+.stat.red .value{color:#ef4444}
+.stat.yellow .value{color:#f59e0b}
+.stat.blue .value{color:#3b82f6}
+.section{background:#fff;border-radius:10px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.section h2{font-size:15px;font-weight:600;margin-bottom:14px;color:#1a1a2e;display:flex;align-items:center;gap:8px}
+.section h2 .icon{font-size:18px}
+.flags-grid{display:grid;gap:10px}
+.flag-row{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:#f8f9fb;border-radius:8px;transition:background .2s}
+.flag-row:hover{background:#eef1f6}
+.flag-info{flex:1}
+.flag-label{font-size:14px;font-weight:500}
+.flag-desc{font-size:12px;color:#888;margin-top:2px}
+.flag-status{font-size:11px;padding:2px 8px;border-radius:4px;margin-left:8px}
+.flag-status.not-ready{background:#fef2f2;color:#dc2626}
+.toggle{position:relative;width:44px;height:24px;flex-shrink:0;margin-left:12px}
+.toggle input{opacity:0;width:0;height:0}
+.toggle .slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#ccc;border-radius:24px;transition:.3s}
+.toggle .slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s}
+.toggle input:checked+.slider{background:#22c55e}
+.toggle input:checked+.slider:before{transform:translateX(20px)}
+.toggle input:disabled+.slider{background:#e5e5e5;cursor:not-allowed;opacity:.5}
+.toggle input:disabled:checked+.slider{background:#86efac}
+.last-event{padding:12px 14px;background:#f8f9fb;border-radius:8px}
+.last-event .ev-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.tag{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:500}
+.tag-a{background:#dbeafe;color:#1d4ed8}
+.tag-b{background:#fef3c7;color:#92400e}
+.tag-vendas{background:#e0e7ff;color:#3730a3}
+.tag-notas{background:#fce7f3;color:#9d174d}
+.tag-enviados{background:#d1fae5;color:#065f46}
+.ev-time{font-size:12px;color:#888}
+.ev-detail{font-size:13px;color:#555}
+.jobs-table{width:100%;border-collapse:collapse;font-size:13px}
+.jobs-table th{text-align:left;padding:8px 10px;border-bottom:2px solid #eee;color:#888;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+.jobs-table td{padding:8px 10px;border-bottom:1px solid #f3f4f6;vertical-align:top}
+.jobs-table tr:hover td{background:#f8f9fb}
+.status-badge{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:500;white-space:nowrap}
+.status-done{background:#d1fae5;color:#065f46}
+.status-queued{background:#dbeafe;color:#1d4ed8}
+.status-running{background:#fef3c7;color:#92400e}
+.status-failed{background:#fef2f2;color:#dc2626}
+.status-dead{background:#fce7f3;color:#9d174d}
+.job-type{font-family:monospace;font-size:12px;color:#555}
+.job-preview{font-size:11px;color:#888;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.job-error{font-size:11px;color:#dc2626;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.auto-refresh{font-size:11px;color:#888;display:flex;align-items:center;gap:4px}
+.auto-refresh .dot{width:6px;height:6px;border-radius:50%;background:#22c55e;display:inline-block}
+.empty-state{text-align:center;padding:24px;color:#aaa;font-size:14px}
+@media(max-width:600px){.container{padding:12px}.stats{grid-template-columns:repeat(2,1fr)}.header{flex-direction:column;gap:8px;text-align:center}.jobs-table{font-size:11px}}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Tiny Integrator</h1>
+  <div class="meta">
+    <span class="auto-refresh"><span class="dot" id="autoRefreshDot"></span> Auto-refresh 1min</span>
+    <button class="refresh-btn" onclick="refresh()" id="refreshBtn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+      Atualizar
+    </button>
+  </div>
+</div>
+<div class="container">
+  <div class="stats" id="statsGrid"></div>
+
+  <div class="section">
+    <h2><span class="icon">&#9881;</span> Controles</h2>
+    <div class="flags-grid" id="flagsGrid">
+      <div class="empty-state">Carregando...</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2><span class="icon">&#128232;</span> Ultimo Webhook</h2>
+    <div class="last-event" id="lastEvent">
+      <div class="empty-state">Carregando...</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2><span class="icon">&#128203;</span> Ultimos Jobs</h2>
+    <div style="overflow-x:auto">
+      <table class="jobs-table" id="jobsTable">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Tipo</th>
+            <th>Status</th>
+            <th>Detalhe</th>
+            <th>Quando</th>
+          </tr>
+        </thead>
+        <tbody id="jobsBody">
+          <tr><td colspan="5" class="empty-state">Carregando...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let autoRefreshTimer;
+
+function timeAgo(dateStr) {
+  if (!dateStr) return '-';
+  const d = new Date(dateStr);
+  const now = new Date();
+  const diff = Math.floor((now - d) / 1000);
+  if (diff < 60) return diff + 's atras';
+  if (diff < 3600) return Math.floor(diff/60) + 'min atras';
+  if (diff < 86400) return Math.floor(diff/3600) + 'h atras';
+  return Math.floor(diff/86400) + 'd atras';
+}
+
+function formatDate(dateStr) {
+  if (!dateStr) return '-';
+  const d = new Date(dateStr);
+  return d.toLocaleString('pt-BR', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+}
+
+function sourceBadge(source) {
+  return `<span class="tag tag-${(source||'').toLowerCase()}">${source||'?'}</span>`;
+}
+
+function topicBadge(topic) {
+  const cls = {'vendas':'tag-vendas','notas':'tag-notas','enviados':'tag-enviados','notas_fiscais':'tag-notas'}[topic] || 'tag-vendas';
+  return `<span class="tag ${cls}">${topic||'?'}</span>`;
+}
+
+function statusBadge(status) {
+  return `<span class="status-badge status-${status}">${status}</span>`;
+}
+
+function previewText(job) {
+  if (job.last_error && (job.status === 'failed' || job.status === 'dead')) {
+    return `<span class="job-error" title="${escHtml(job.last_error)}">${escHtml(truncate(job.last_error, 60))}</span>`;
+  }
+  if (job.action_preview) {
+    const ap = typeof job.action_preview === 'string' ? JSON.parse(job.action_preview) : job.action_preview;
+    if (ap.skipped) return `<span class="job-preview" title="${escHtml(ap.reason||'')}">${escHtml(ap.reason||'skipped')}</span>`;
+    if (ap.dry_run) return `<span class="job-preview">dry-run</span>`;
+    if (ap.done || ap.created) {
+      const parts = [];
+      if (ap.venda_b_id) parts.push('B:' + ap.venda_b_id);
+      if (ap.target_venda_id) parts.push(ap.target_source + ':' + ap.target_venda_id);
+      return `<span class="job-preview" style="color:#065f46">${parts.join(' ') || 'ok'}</span>`;
+    }
+    return `<span class="job-preview">${escHtml(truncate(JSON.stringify(ap), 50))}</span>`;
+  }
+  return '<span class="job-preview">-</span>';
+}
+
+function escHtml(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+function truncate(s, n) { return s && s.length > n ? s.substring(0, n) + '...' : s || ''; }
+
+async function loadFlags() {
+  try {
+    const res = await fetch(API + '/admin/flags');
+    const data = await res.json();
+    const grid = document.getElementById('flagsGrid');
+    if (!data.flags || data.flags.length === 0) {
+      grid.innerHTML = '<div class="empty-state">Nenhum controle configurado</div>';
+      return;
+    }
+    grid.innerHTML = data.flags.map(f => `
+      <div class="flag-row">
+        <div class="flag-info">
+          <span class="flag-label">${escHtml(f.label || f.key)}</span>
+          ${!f.functional ? '<span class="flag-status not-ready">Em breve</span>' : ''}
+          <div class="flag-desc">${escHtml(f.description || '')}</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" ${f.enabled ? 'checked' : ''} ${!f.functional ? 'disabled' : ''}
+                 onchange="toggleFlag('${f.key}', this.checked)">
+          <span class="slider"></span>
+        </label>
+      </div>
+    `).join('');
+  } catch(e) {
+    document.getElementById('flagsGrid').innerHTML = '<div class="empty-state">Erro ao carregar controles</div>';
+  }
+}
+
+async function toggleFlag(key, enabled) {
+  try {
+    await fetch(API + '/admin/flags', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key, enabled})
+    });
+  } catch(e) {
+    alert('Erro ao salvar: ' + e.message);
+    loadFlags();
+  }
+}
+
+async function loadDashboard() {
+  try {
+    const res = await fetch(API + '/admin/dashboard');
+    const data = await res.json();
+
+    const sg = document.getElementById('statsGrid');
+    sg.innerHTML = `
+      <div class="stat blue"><div class="value">${data.events_total || 0}</div><div class="label">Webhooks</div></div>
+      <div class="stat green"><div class="value">${data.today_done || 0}</div><div class="label">Hoje OK</div></div>
+      <div class="stat red"><div class="value">${data.today_failed || 0}</div><div class="label">Hoje Erro</div></div>
+      <div class="stat yellow"><div class="value">${(data.job_counts||{}).queued || 0}</div><div class="label">Na Fila</div></div>
+      <div class="stat"><div class="value">${data.orders_replicated || 0}</div><div class="label">Replicados</div></div>
+    `;
+
+    const le = document.getElementById('lastEvent');
+    if (data.last_event) {
+      const ev = data.last_event;
+      le.innerHTML = `
+        <div class="ev-row">
+          ${sourceBadge(ev.source)}
+          ${topicBadge(ev.topic)}
+          ${ev.venda_id ? `<span class="ev-detail">Venda #${ev.venda_id}</span>` : ''}
+          ${ev.codigo_situacao ? `<span class="tag">${ev.codigo_situacao}</span>` : ''}
+          <span class="ev-time">${timeAgo(ev.created_at)}</span>
+        </div>
+      `;
+    } else {
+      le.innerHTML = '<div class="empty-state">Nenhum webhook recebido</div>';
+    }
+
+    const tbody = document.getElementById('jobsBody');
+    if (data.recent_jobs && data.recent_jobs.length > 0) {
+      tbody.innerHTML = data.recent_jobs.map(j => `
+        <tr>
+          <td>${j.id}</td>
+          <td><span class="job-type">${j.job_type}</span></td>
+          <td>${statusBadge(j.status)}</td>
+          <td>${previewText(j)}</td>
+          <td style="white-space:nowrap;color:#888;font-size:12px">${timeAgo(j.updated_at || j.created_at)}</td>
+        </tr>
+      `).join('');
+    } else {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Nenhum job</td></tr>';
+    }
+  } catch(e) {
+    document.getElementById('statsGrid').innerHTML = '<div class="stat red"><div class="value">!</div><div class="label">Erro</div></div>';
+  }
+}
+
+async function refresh() {
+  const btn = document.getElementById('refreshBtn');
+  btn.classList.add('loading');
+  btn.textContent = 'Atualizando...';
+  await Promise.all([loadFlags(), loadDashboard()]);
+  btn.classList.remove('loading');
+  btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg> Atualizar';
+  resetAutoRefresh();
+}
+
+function resetAutoRefresh() {
+  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+  autoRefreshTimer = setInterval(() => {
+    loadFlags();
+    loadDashboard();
+  }, 60000);
+}
+
+refresh();
+</script>
+</body>
+</html>

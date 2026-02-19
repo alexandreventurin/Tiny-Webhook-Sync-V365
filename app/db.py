@@ -142,6 +142,28 @@ async def init_db():
             except Exception:
                 pass
                 
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS public.feature_flags (
+                    key TEXT PRIMARY KEY,
+                    enabled BOOLEAN NOT NULL DEFAULT false,
+                    functional BOOLEAN NOT NULL DEFAULT false,
+                    label TEXT,
+                    description TEXT,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            
+            await conn.execute("""
+                INSERT INTO public.feature_flags (key, enabled, functional, label, description) VALUES
+                    ('replicate_orders', false, true, 'Replicar Pedidos', 'Cria pedidos em B quando A é aprovado'),
+                    ('sync_status_enviado', false, true, 'Sync Status: Enviado', 'Espelha status enviado de A para B'),
+                    ('sync_status_entregue', false, true, 'Sync Status: Entregue', 'Espelha status entregue de A para B'),
+                    ('sync_status_cancelado', false, true, 'Sync Status: Cancelado', 'Espelha status cancelado entre A e B'),
+                    ('sync_status_faturado', false, true, 'Sync Status: Faturado', 'Espelha status faturado de B para A'),
+                    ('sync_nf_link', false, false, 'Enviar Nota Fiscal', 'Envia link da NF de B para A')
+                ON CONFLICT (key) DO NOTHING
+            """)
+            
         logger.info("Database connected and tables created")
     except Exception as e:
         logger.error(f"Failed to connect to database: {e}")
@@ -613,3 +635,84 @@ async def get_failed_jobs_count() -> dict:
             GROUP BY job_type
         """)
         return {row['job_type']: row['count'] for row in rows}
+
+
+async def get_all_feature_flags() -> list[dict]:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT key, enabled, functional, label, description, updated_at
+            FROM public.feature_flags
+            ORDER BY key
+        """)
+        return [dict(row) for row in rows]
+
+
+async def get_feature_flag(key: str) -> bool:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT enabled, functional FROM public.feature_flags WHERE key = $1
+        """, key)
+        if not row:
+            return False
+        return row['enabled'] and row['functional']
+
+
+async def set_feature_flag(key: str, enabled: bool) -> bool:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE public.feature_flags
+            SET enabled = $2, updated_at = NOW()
+            WHERE key = $1 AND functional = true
+        """, key, enabled)
+        return "UPDATE 1" in result
+
+
+async def get_dashboard_data() -> dict:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        events_total = await conn.fetchval("SELECT COUNT(*) FROM public.events")
+
+        last_event = await conn.fetchrow("""
+            SELECT source, topic, venda_id, codigo_situacao, created_at
+            FROM public.events ORDER BY created_at DESC LIMIT 1
+        """)
+
+        job_counts = {}
+        for status in ['queued', 'running', 'done', 'failed', 'dead']:
+            job_counts[status] = await conn.fetchval(
+                "SELECT COUNT(*) FROM public.jobs WHERE status = $1", status
+            )
+
+        today_done = await conn.fetchval("""
+            SELECT COUNT(*) FROM public.jobs
+            WHERE status = 'done' AND updated_at >= CURRENT_DATE
+        """)
+        today_failed = await conn.fetchval("""
+            SELECT COUNT(*) FROM public.jobs
+            WHERE status IN ('failed', 'dead') AND updated_at >= CURRENT_DATE
+        """)
+
+        recent_jobs = await conn.fetch("""
+            SELECT id, job_type, status, dedupe_key, created_at, updated_at,
+                   action_preview, last_error, attempts
+            FROM public.jobs
+            ORDER BY COALESCE(updated_at, created_at) DESC
+            LIMIT 15
+        """)
+
+        replicated = await conn.fetchval("""
+            SELECT COUNT(*) FROM public.orders_map WHERE venda_b_id IS NOT NULL
+        """)
+
+        return {
+            "events_total": events_total,
+            "last_event": dict(last_event) if last_event else None,
+            "job_counts": job_counts,
+            "today_done": today_done,
+            "today_failed": today_failed,
+            "recent_jobs": [dict(r) for r in recent_jobs],
+            "orders_replicated": replicated,
+        }

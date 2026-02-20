@@ -118,10 +118,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   <div class="stats" id="statsGrid"></div>
 
   <div class="section">
-    <div class="section-header">
-      <h2><span class="icon">&#9881;</span> Controles</h2>
+    <div class="section-header" style="cursor:pointer;user-select:none" onclick="toggleControles()">
+      <h2><span class="icon">&#9881;</span> Controles <span id="controlesSummary" style="font-size:13px;font-weight:400;color:#888;margin-left:6px"></span></h2>
+      <span id="controlesChevron" style="font-size:18px;color:#888;transition:transform .2s">&#9660;</span>
     </div>
-    <div class="flags-grid" id="flagsGrid">
+    <div class="flags-grid" id="flagsGrid" style="display:none">
       <div class="empty-state">Carregando...</div>
     </div>
   </div>
@@ -147,6 +148,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     <div class="section-header">
       <h2><span class="icon">&#128203;</span> Ultimos Jobs</h2>
       <div class="section-filters">
+        <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:4px;cursor:pointer">
+          <input type="checkbox" id="hideNotMapped" checked onchange="loadJobs()" style="cursor:pointer">
+          Ocultar not_mapped
+        </label>
         <select class="filter-select" id="jobsLimit" onchange="loadJobs()">
           <option value="5">5</option>
           <option value="10" selected>10</option>
@@ -162,10 +167,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
           <option value="dead">dead</option>
           <option value="skipped_not_mapped">not_mapped</option>
         </select>
-        <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:4px;cursor:pointer">
-          <input type="checkbox" id="hideNotMapped" checked onchange="loadJobs()" style="cursor:pointer">
-          Ocultar not_mapped
-        </label>
         <select class="filter-select" id="jobsType" onchange="loadJobs()">
           <option value="">Tipo: Todos</option>
           <option value="fetch_order_a">fetch_order_a</option>
@@ -299,15 +300,27 @@ async function loadAuth() {
   }
 }
 
+let _controlesOpen = false;
+function toggleControles() {
+  _controlesOpen = !_controlesOpen;
+  document.getElementById('flagsGrid').style.display = _controlesOpen ? '' : 'none';
+  document.getElementById('controlesChevron').style.transform = _controlesOpen ? 'rotate(180deg)' : '';
+}
+
 async function loadFlags() {
   try {
     const res = await fetch(API + '/admin/flags');
     const data = await res.json();
     const grid = document.getElementById('flagsGrid');
+    const summary = document.getElementById('controlesSummary');
     if (!data.flags || data.flags.length === 0) {
       grid.innerHTML = '<div class="empty-state">Nenhum controle configurado</div>';
+      summary.textContent = '';
       return;
     }
+    const total = data.flags.length;
+    const on = data.flags.filter(f => f.enabled).length;
+    summary.textContent = `(${on}/${total} ligados)`;
     grid.innerHTML = data.flags.map(f => `
       <div class="flag-row">
         <div class="flag-info">
@@ -334,6 +347,10 @@ async function toggleFlag(key, enabled) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({key, enabled})
     });
+    const checkboxes = document.querySelectorAll('#flagsGrid .toggle input[type=checkbox]');
+    let on = 0;
+    checkboxes.forEach(cb => { if (cb.checked) on++; });
+    document.getElementById('controlesSummary').textContent = `(${on}/${checkboxes.length} ligados)`;
   } catch(e) {
     alert('Erro ao salvar: ' + e.message);
     loadFlags();

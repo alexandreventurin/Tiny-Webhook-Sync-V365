@@ -10,6 +10,7 @@ from app.db import (
     fetch_and_lock_jobs,
     update_job_done,
     update_job_failed,
+    update_job_skipped_not_mapped,
     upsert_orders_map,
     upsert_orders_a_snapshot,
     upsert_orders_a_fetched,
@@ -589,7 +590,18 @@ async def process_job(job: dict) -> None:
             elif source == "B":
                 mapping = await get_order_mapping_by_b(str(venda_id))
                 if not mapping:
-                    raise Exception(f"No orders_map entry for venda_b_id={venda_id}")
+                    # TODO: futuramente, chamar GET /pedidos/{venda_id} no Tiny B
+                    # para verificar se vendedor == Rejuderme (963241122).
+                    # Por ora, marca como not_mapped (pedido próprio da Muy Bela).
+                    action_preview = {
+                        "would": "sync_status",
+                        "skipped": True,
+                        "reason": "not_mapped",
+                        "note": f"venda_b_id={venda_id} não existe na orders_map (pedido não replicado)",
+                    }
+                    await update_job_skipped_not_mapped(job_id, action_preview)
+                    logger.info(f"Job {job_id} skipped_not_mapped: venda_b_id={venda_id}")
+                    return
                 target_id = str(mapping["venda_a_id"])
                 target_source = "A"
                 target_token = await ensure_access_token("A")
@@ -712,11 +724,55 @@ async def run_worker_once_detailed(limit: int = 50) -> dict:
     return {"locked": locked, "done": done, "failed": failed, "dead": dead}
 
 
+TOKEN_REFRESH_INTERVAL_HOURS = 12
+
+async def maybe_refresh_tokens():
+    """Renova tokens proativamente. Se expirado ou updated_at > 12h, força refresh."""
+    try:
+        from app.tiny_oauth import get_tokens_from_db, ensure_access_token
+        for account in ("A", "B"):
+            tokens = await get_tokens_from_db(account)
+            if not tokens or not tokens.get("refresh_token"):
+                continue
+            expires_at = tokens.get("expires_at")
+            updated_at = tokens.get("updated_at")
+            now = datetime.now(timezone.utc)
+            needs_refresh = False
+            reason = ""
+            if expires_at:
+                if hasattr(expires_at, 'tzinfo') and expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                if expires_at <= now:
+                    needs_refresh = True
+                    reason = "expired"
+            if not needs_refresh and updated_at:
+                if hasattr(updated_at, 'tzinfo') and updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=timezone.utc)
+                age_hours = (now - updated_at).total_seconds() / 3600
+                if age_hours > TOKEN_REFRESH_INTERVAL_HOURS:
+                    needs_refresh = True
+                    reason = f"stale (updated {age_hours:.1f}h ago)"
+            if needs_refresh:
+                logger.info(f"Token {account}: {reason}, refreshing...")
+                result = await ensure_access_token(account)
+                if result:
+                    logger.info(f"Token {account} refreshed successfully")
+                else:
+                    logger.warning(f"Token {account} refresh failed")
+    except Exception as e:
+        logger.error(f"Token refresh check failed: {e}")
+
+
+_last_token_check = None
+
 async def worker_loop():
-    global worker_running
+    global worker_running, _last_token_check
     worker_running = True
     await refresh_products_map()
     logger.info("Worker started")
+    
+    _last_token_check = datetime.now(timezone.utc)
+    await maybe_refresh_tokens()
     
     while worker_running:
         try:
@@ -725,6 +781,11 @@ async def worker_loop():
                 logger.info(f"Worker processed {processed} jobs")
         except Exception as e:
             logger.error(f"Worker error: {e}")
+        
+        now = datetime.now(timezone.utc)
+        if _last_token_check is None or (now - _last_token_check).total_seconds() > 3600:
+            _last_token_check = now
+            await maybe_refresh_tokens()
         
         await asyncio.sleep(5)
     

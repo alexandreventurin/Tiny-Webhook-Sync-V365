@@ -86,7 +86,7 @@ async def get_tokens_from_db(account: str) -> Optional[dict]:
     p = await get_pool()
     async with p.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT access_token, refresh_token, expires_at FROM public.tiny_tokens WHERE account = $1",
+            "SELECT access_token, refresh_token, expires_at, updated_at FROM public.tiny_tokens WHERE account = $1",
             account
         )
         return dict(row) if row else None

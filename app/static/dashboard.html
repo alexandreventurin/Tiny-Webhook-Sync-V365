@@ -70,6 +70,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .status-running{background:#fef3c7;color:#92400e}
 .status-failed{background:#fef2f2;color:#dc2626}
 .status-dead{background:#fce7f3;color:#9d174d}
+.status-skipped_not_mapped{background:#f3f4f6;color:#9ca3af}
 .job-type{font-family:monospace;font-size:12px;color:#555}
 .job-preview{font-size:11px;color:#888;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .job-error{font-size:11px;color:#dc2626;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -153,13 +154,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
           <option value="50">50</option>
         </select>
         <select class="filter-select" id="jobsStatus" onchange="loadJobs()">
-          <option value="">Status: Todos</option>
+          <option value="" selected>Status: Todos</option>
           <option value="queued">queued</option>
           <option value="running">running</option>
           <option value="done">done</option>
           <option value="failed">failed</option>
           <option value="dead">dead</option>
+          <option value="skipped_not_mapped">not_mapped</option>
         </select>
+        <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:4px;cursor:pointer">
+          <input type="checkbox" id="hideNotMapped" checked onchange="loadJobs()" style="cursor:pointer">
+          Ocultar not_mapped
+        </label>
         <select class="filter-select" id="jobsType" onchange="loadJobs()">
           <option value="">Tipo: Todos</option>
           <option value="fetch_order_a">fetch_order_a</option>
@@ -214,7 +220,8 @@ function topicBadge(topic) {
 }
 
 function statusBadge(status) {
-  return `<span class="status-badge status-${status}">${status}</span>`;
+  const label = status === 'skipped_not_mapped' ? 'not_mapped' : status;
+  return `<span class="status-badge status-${status}">${label}</span>`;
 }
 
 function actionBadge(action_result) {
@@ -364,6 +371,7 @@ async function loadJobs() {
   const limit = document.getElementById('jobsLimit').value;
   const status = document.getElementById('jobsStatus').value;
   const jobType = document.getElementById('jobsType').value;
+  const hideNotMapped = document.getElementById('hideNotMapped').checked;
   const tbody = document.getElementById('jobsBody');
   try {
     let url = API + '/admin/dashboard?_jobs=1';
@@ -371,9 +379,10 @@ async function loadJobs() {
     params.set('limit', limit);
     if (status) params.set('status', status);
     if (jobType) params.set('job_type', jobType);
+    if (hideNotMapped && !status) params.set('exclude_status', 'skipped_not_mapped');
     const res = await fetch(API + '/admin/jobs-dashboard?' + params.toString());
     const data = await res.json();
-    const jobs = data.jobs || [];
+    let jobs = data.jobs || [];
     if (jobs.length > 0) {
       tbody.innerHTML = jobs.map(j => `
         <tr>

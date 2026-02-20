@@ -320,6 +320,27 @@ async def update_job_done(job_id, action_preview: dict) -> None:
                 logger.error(f"Failed to update job done: {e}")
 
 
+async def update_job_skipped_not_mapped(job_id, action_preview: dict) -> None:
+    p = await get_pool()
+    action_preview_str = json.dumps(action_preview)
+    async with p.acquire() as conn:
+        try:
+            await conn.execute("""
+                UPDATE public.jobs
+                SET status = 'skipped_not_mapped', action_preview = $2::jsonb, locked_at = NULL, locked_by = NULL
+                WHERE id = $1
+            """, job_id, action_preview_str)
+        except Exception:
+            try:
+                await conn.execute("""
+                    UPDATE public.jobs
+                    SET status = 'skipped_not_mapped', locked_at = NULL, locked_by = NULL
+                    WHERE id = $1
+                """, job_id)
+            except Exception as e:
+                logger.error(f"Failed to update job skipped_not_mapped: {e}")
+
+
 async def update_job_failed(job_id, error: str, attempts: int) -> None:
     p = await get_pool()
     new_status = 'dead' if attempts >= MAX_ATTEMPTS else 'failed'

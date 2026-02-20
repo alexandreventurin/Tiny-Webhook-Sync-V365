@@ -1,0 +1,207 @@
+GET
+/notas
+Listar notas fiscais
+
+
+Parameters
+Name	Description
+tipo
+(query)
+Pesquisa por tipo de nota
+
+E - Entrada
+S - Saida
+Available values : E, S
+
+
+--
+numero
+integer
+(query)
+Pesquisa por número da nota
+
+numero
+cpfCnpj
+string
+(query)
+Pesquisa por CPF ou CNPJ
+
+cpfCnpj
+dataInicial
+string
+(query)
+Pesquisa por data de criação
+
+2023-01-01
+dataFinal
+string
+(query)
+Pesquisa por data de criação
+
+2023-01-01
+situacao
+(query)
+Pesquisa pela situacão da nota
+
+1 - Pendente
+2 - Emitida
+3 - Cancelada
+4 - Enviada Aguardando Recibo
+5 - Rejeitada
+6 - Autorizada
+7 - Emitida Danfe
+8 - Registrada
+9 - Enviada Aguardando Protocolo
+10 - Denegada
+Available values : 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+
+
+--
+numeroPedidoEcommerce
+string
+(query)
+Pesquisa pelo número do pedido no e-commerce
+
+numeroPedidoEcommerce
+idVendedor
+integer
+(query)
+Pesquisa por identificador do vendedor
+
+idVendedor
+idFormaEnvio
+integer
+(query)
+Pesquisa por identificador da forma de envio
+
+idFormaEnvio
+idVenda
+integer
+(query)
+Pesquisa por identificador da venda
+
+idVenda
+marcadores
+array[string]
+(query)
+Pesquisa por marcadores
+
+orderBy
+(query)
+Define a ordenação da listagem por ordem crescente ou decrescente
+
+asc - Crescente
+desc - Descrescente
+Available values : asc, desc
+
+
+--
+limit
+integer
+(query)
+Limite da paginação
+
+Default value : 100
+
+100
+offset
+integer
+(query)
+Offset da paginação
+
+Default value : 0
+
+0
+Responses
+Code	Description	Links
+200	
+OK
+
+Media type
+
+application/json
+Controls Accept header.
+Example Value
+Schema
+{
+  "itens": [
+    {
+      "situacao": 1,
+      "tipo": "E",
+      "numero": "string",
+      "serie": "string",
+      "chaveAcesso": "string",
+      "dataEmissao": "string",
+      "cliente": {
+        "nome": "string",
+        "codigo": "string",
+        "fantasia": "string",
+        "tipoPessoa": "J",
+        "cpfCnpj": "string",
+        "inscricaoEstadual": "string",
+        "rg": "string",
+        "telefone": "string",
+        "celular": "string",
+        "email": "string",
+        "endereco": {
+          "endereco": "string",
+          "numero": "string",
+          "complemento": "string",
+          "bairro": "string",
+          "municipio": "string",
+          "cep": "string",
+          "uf": "string",
+          "pais": "string"
+        },
+        "id": 0
+      },
+      "enderecoEntrega": {
+        "endereco": "string",
+        "numero": "string",
+        "complemento": "string",
+        "bairro": "string",
+        "municipio": "string",
+        "cep": "string",
+        "uf": "string",
+        "pais": "string",
+        "nomeDestinatario": "string",
+        "cpfCnpj": "string",
+        "tipoPessoa": "string",
+        "telefone": "string",
+        "inscricaoEstadual": "string"
+      },
+      "valor": 0,
+      "valorProdutos": 0,
+      "valorFrete": 0,
+      "vendedor": {
+        "id": 0,
+        "nome": "string"
+      },
+      "idFormaEnvio": 0,
+      "idFormaFrete": 0,
+      "codigoRastreamento": "string",
+      "urlRastreamento": "string",
+      "fretePorConta": "string",
+      "qtdVolumes": 0,
+      "pesoBruto": 0,
+      "pesoLiquido": 0,
+      "id": 0,
+      "ecommerce": {
+        "id": 0,
+        "nome": "string",
+        "numeroPedidoEcommerce": "string",
+        "numeroPedidoCanalVenda": "string",
+        "canalVenda": "string"
+      },
+      "origem": {
+        "id": "string",
+        "tipo": "pedido_compra"
+      }
+    }
+  ],
+  "paginacao": {
+    "limit": 0,
+    "offset": 0,
+    "total": 0
+  }
+}

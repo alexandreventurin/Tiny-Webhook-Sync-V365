@@ -107,7 +107,7 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
             logger.info(f"Echo detected: {source} venda {venda_id_int} {codigo_situacao_str} (ignored)")
             return JSONResponse(content={"ok": True, "status": "ignored", "reason": "echo"})
     
-    dedupe_key = generate_dedupe_key(source, topic, venda_id_int, job_type)
+    dedupe_key = generate_dedupe_key(source, topic, venda_id_int, job_type, codigo_situacao=codigo_situacao_str)
     
     job_payload = {
         "source": source,

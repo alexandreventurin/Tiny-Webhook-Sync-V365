@@ -309,7 +309,7 @@ async def process_job(job: dict) -> None:
                 await upsert_orders_map(external_key=external_key, venda_a_id=str(venda_id))
                 action_preview = {
                     "would": "create_order_in_B",
-                    "situacao_target": 8,
+                    "situacao_target": "em_aberto",
                     "venda_a_id": venda_id,
                     "external_key": external_key,
                     "dry_run": True,
@@ -426,7 +426,6 @@ async def process_job(job: dict) -> None:
             order_payload_b = {
                 "data": order_data.get('data'),
                 "idContato": id_contato_b,
-                "situacao": 8,
                 "numeroOrdemCompra": str(order_data.get('numeroPedido') or ""),
                 "itens": itens_b,
                 "enderecoEntrega": endereco_entrega,
@@ -455,7 +454,7 @@ async def process_job(job: dict) -> None:
             
             action_preview = {
                 "would": "create_order_in_B",
-                "situacao_target": 8,
+                "situacao_target": "em_aberto",
                 "venda_a_id": venda_id,
                 "venda_b_id": venda_b_id,
                 "external_key": external_key,
@@ -583,7 +582,17 @@ async def process_job(job: dict) -> None:
             if source == "A":
                 mapping = await get_order_mapping_by_a(str(venda_id))
                 if not mapping:
-                    raise Exception(f"No orders_map entry for venda_a_id={venda_id}")
+                    action_preview = {
+                        "would": "sync_status",
+                        "skipped": True,
+                        "reason": "not_mapped",
+                        "source": source,
+                        "venda_a_id": str(venda_id),
+                        "note": "Pedido de A sem replicação em B"
+                    }
+                    await update_job_skipped_not_mapped(job_id, action_preview)
+                    logger.info(f"Job {job_id} skipped_not_mapped: venda_a_id={venda_id}")
+                    return
                 target_id = str(mapping["venda_b_id"])
                 target_source = "B"
                 target_token = await ensure_access_token("B")

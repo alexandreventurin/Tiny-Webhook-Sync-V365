@@ -325,20 +325,23 @@ async def update_job_skipped_not_mapped(job_id, action_preview: dict) -> None:
     action_preview_str = json.dumps(action_preview)
     async with p.acquire() as conn:
         try:
-            await conn.execute("""
+            result = await conn.execute("""
                 UPDATE public.jobs
-                SET status = 'skipped_not_mapped', action_preview = $2::jsonb, locked_at = NULL, locked_by = NULL
+                SET status = 'skipped_not_mapped', action_preview = $2::jsonb, locked_at = NULL, locked_by = NULL, updated_at = NOW()
                 WHERE id = $1
             """, job_id, action_preview_str)
-        except Exception:
+            if result != "UPDATE 1":
+                logger.warning(f"update_job_skipped_not_mapped({job_id}): unexpected result '{result}'")
+        except Exception as e1:
+            logger.warning(f"update_job_skipped_not_mapped primary failed for {job_id}: {e1}")
             try:
                 await conn.execute("""
                     UPDATE public.jobs
-                    SET status = 'skipped_not_mapped', locked_at = NULL, locked_by = NULL
+                    SET status = 'skipped_not_mapped', locked_at = NULL, locked_by = NULL, updated_at = NOW()
                     WHERE id = $1
                 """, job_id)
-            except Exception as e:
-                logger.error(f"Failed to update job skipped_not_mapped: {e}")
+            except Exception as e2:
+                logger.error(f"Failed to update job skipped_not_mapped: {e2}")
 
 
 async def update_job_failed(job_id, error: str, attempts: int) -> None:

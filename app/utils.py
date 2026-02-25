@@ -42,9 +42,12 @@ def generate_dedupe_key(
     source: str,
     topic: str,
     venda_id: int | None,
-    job_type: str
+    job_type: str,
+    codigo_situacao: str | None = None
 ) -> str:
     parts = [source, topic, str(venda_id or ""), job_type]
+    if job_type == "sync_status" and codigo_situacao:
+        parts.append(codigo_situacao)
     return ":".join(parts)
 
 

@@ -119,6 +119,24 @@ class TinyClient:
                 logger.warning(f"Failed to add tags to order {pedido_id}: {response.status_code} {response.text[:200]}")
                 return False
 
+    async def get_nota_fiscal(self, nota_id: str) -> dict:
+        url = f"{self._base_url}/notas-fiscais/{nota_id}"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, headers=self._headers())
+            if response.status_code != 200:
+                raise TinyApiError(response.status_code, response.text, url)
+            return response.json()
+
+    async def update_order(self, pedido_id: str, fields: dict) -> dict:
+        url = f"{self._base_url}/pedidos/{pedido_id}"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.patch(url, headers=self._headers(), json=fields)
+            if response.status_code not in (200, 204):
+                raise TinyApiError(response.status_code, response.text, url)
+            if response.status_code == 204:
+                return {}
+            return response.json()
+
     async def list_all_products(self, limit: int = 100) -> list:
         url = f"{self._base_url}/produtos"
         all_products = []

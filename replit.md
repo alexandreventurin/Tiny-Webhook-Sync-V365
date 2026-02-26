@@ -103,7 +103,7 @@ app/
 | `sync_status_entregue` | Sync Entregue | Espelha status entregue de A para B | Sim |
 | `sync_status_cancelado` | Sync Cancelado | Espelha status cancelado entre A e B | Sim |
 | `sync_status_faturado` | Sync Faturado | Espelha status faturado de B para A | Sim |
-| `sync_nf_link` | Enviar NF | Envia link da NF de B para A | Não (em breve) |
+| `sync_nf_link` | Enviar NF | Envia dados da NF de B para observações de A | Sim |
 
 ## Job Flow
 
@@ -128,11 +128,28 @@ app/
    - If EXECUTE_TINY_B=true: calls POST /pedidos (Em Aberto)
    - Saves venda_b_id to orders_map
 
+### B/notas_fiscais (sync_nf_link)
+1. Webhook chega com `idNotaFiscalTiny` → cria job `sync_nf_link`
+2. Worker processa `sync_nf_link`:
+   - Verifica feature flag `sync_nf_link`
+   - Busca NF em B: `GET /notas-fiscais/{id}` (numero, serie, chaveAcesso, protocolo, dataAutorizacao, pedido)
+   - Extrai `pedido.id` da NF → busca `orders_map` por `venda_b_id`
+   - Se não existe mapping → done/skipped com reason `no_orders_map`
+   - Busca pedido em A: `GET /pedidos/{venda_a_id}` para observações atuais
+   - Concatena bloco NF após 2 linhas em branco:
+     ```
+     NF {numero} - {serie} | CHAVE DE ACESSO
+     {chave_acesso}
+     PROTOCOLO DE AUTORIZAÇÃO DE USO
+     {protocolo} - {data_autorizacao}
+     ```
+   - Atualiza pedido em A: `PATCH /pedidos/{venda_a_id}` com novas observações
+
 ## Job Types
 - `fetch_order_a` - Fetch order details from Tiny A
 - `create_order_b` - Create order in Tiny B (Em Aberto, somente depósito Dropshipping)
 - `sync_status` - Sync status changes (pronto_envio, entregue, cancelado, faturado, enviado)
-- `sync_nf_link` - Sync fiscal note links
+- `sync_nf_link` - Envia dados da NF de B para observações de A
 - `add_tag_b` - Adiciona marcador "API Rejuderme" ao pedido em B (retry com backoff: 1min, 3min, 5min)
 - `noop` - No operation
 

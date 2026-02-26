@@ -697,16 +697,87 @@ async def process_job(job: dict) -> None:
                 logger.info(f"Job {job_id} skipped: sync_nf_link flag disabled")
                 return
 
-            url_danfe = payload.get('url_danfe')
+            if not id_nota_fiscal:
+                await update_job_failed(job_id, "missing id_nota_fiscal", attempts)
+                return
+
+            token_b = await ensure_access_token("B")
+            if not token_b:
+                await update_job_failed(job_id, "No valid OAuth token for B", attempts)
+                return
+
+            client_b = TinyClient(token_b)
+            nf_data = await client_b.get_nota_fiscal(id_nota_fiscal)
+            logger.info(f"Job {job_id}: fetched NF {id_nota_fiscal}, keys: {list(nf_data.keys())}")
+
+            nf_numero = nf_data.get("numero") or ""
+            nf_serie = nf_data.get("serie") or ""
+            nf_chave_acesso = nf_data.get("chaveAcesso") or ""
+            nf_protocolo = nf_data.get("protocolo") or ""
+            nf_data_autorizacao = nf_data.get("dataAutorizacao") or ""
+
+            nf_pedido = nf_data.get("pedido") or {}
+            venda_b_id_nf = str(nf_pedido.get("id") or "") if nf_pedido.get("id") else None
+
+            if not venda_b_id_nf:
+                action_preview = {"would": "sync_nf_link", "skipped": True, "reason": "nf_has_no_pedido", "id_nota_fiscal": id_nota_fiscal}
+                await update_job_done(job_id, action_preview)
+                logger.info(f"Job {job_id}: NF {id_nota_fiscal} has no linked pedido, skipping")
+                return
+
+            mapping = await get_order_mapping_by_b(venda_b_id_nf)
+            if not mapping:
+                action_preview = {"would": "sync_nf_link", "skipped": True, "reason": "no_orders_map", "venda_b_id": venda_b_id_nf, "id_nota_fiscal": id_nota_fiscal}
+                await update_job_done(job_id, action_preview)
+                logger.info(f"Job {job_id}: no orders_map for venda_b {venda_b_id_nf}, skipping")
+                return
+
+            venda_a_id = mapping.get("venda_a_id")
+            if not venda_a_id:
+                await update_job_failed(job_id, f"orders_map for B:{venda_b_id_nf} has no venda_a_id", attempts)
+                return
+
+            token_a = await ensure_access_token("A")
+            if not token_a:
+                await update_job_failed(job_id, "No valid OAuth token for A", attempts)
+                return
+
+            client_a = TinyClient(token_a)
+            order_a = await client_a.get_order_details(venda_a_id)
+            obs_atual = order_a.get("observacoes") or ""
+
+            nf_block = (
+                f"NF {nf_numero} - {nf_serie} | CHAVE DE ACESSO\n"
+                f"{nf_chave_acesso}\n"
+                f"PROTOCOLO DE AUTORIZAÇÃO DE USO\n"
+                f"{nf_protocolo} - {nf_data_autorizacao}"
+            )
+
+            if nf_chave_acesso and nf_chave_acesso in obs_atual:
+                action_preview = {"would": "sync_nf_link", "skipped": True, "reason": "nf_already_in_obs", "venda_a_id": venda_a_id, "nf_numero": nf_numero}
+                await update_job_done(job_id, action_preview)
+                logger.info(f"Job {job_id}: NF {nf_numero} already in observations of A:{venda_a_id}, skipping")
+                return
+
+            if obs_atual.strip():
+                nova_obs = obs_atual.rstrip() + "\n\n" + nf_block
+            else:
+                nova_obs = nf_block
+
+            await client_a.update_order(venda_a_id, {"observacoes": nova_obs})
+
             action_preview = {
                 "would": "sync_nf_link",
+                "done": True,
                 "id_nota_fiscal": id_nota_fiscal,
-                "url_danfe": url_danfe,
-                "note": "later we will call GET /notas/{idNota}/link or /notas/{idNota} to resolve venda"
+                "venda_b_id": venda_b_id_nf,
+                "venda_a_id": venda_a_id,
+                "nf_numero": nf_numero,
+                "nf_serie": nf_serie,
+                "nf_chave_acesso": nf_chave_acesso[:20] + "..." if len(nf_chave_acesso) > 20 else nf_chave_acesso,
             }
-            
             await update_job_done(job_id, action_preview)
-            logger.info(f"Job {job_id} completed: sync_nf_link for NF {id_nota_fiscal}")
+            logger.info(f"Job {job_id} completed: sync_nf_link NF {nf_numero} for A:{venda_a_id} (from B:{venda_b_id_nf})")
         
         elif job_type == 'add_tag_b':
             TAG_BACKOFF_MINUTES = [1, 3, 5]

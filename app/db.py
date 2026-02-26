@@ -183,8 +183,8 @@ async def init_db():
                     ('sync_status_entregue', false, true, 'Sync Status: Entregue', 'Espelha status entregue de A para B'),
                     ('sync_status_cancelado', false, true, 'Sync Status: Cancelado', 'Espelha status cancelado entre A e B'),
                     ('sync_status_faturado', false, true, 'Sync Status: Faturado', 'Espelha status faturado de B para A'),
-                    ('sync_nf_link', false, false, 'Enviar Nota Fiscal', 'Envia link da NF de B para A')
-                ON CONFLICT (key) DO NOTHING
+                    ('sync_nf_link', false, true, 'Enviar NF', 'Envia dados da NF de B para observações de A')
+                ON CONFLICT (key) DO UPDATE SET functional = EXCLUDED.functional, label = EXCLUDED.label, description = EXCLUDED.description
             """)
             
         logger.info("Database connected and tables created")

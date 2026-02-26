@@ -17,7 +17,8 @@ from app.db import (
     get_events_count, get_jobs_count_by_status,
     get_jobs_list, get_last_event_at, get_last_job_done_at,
     get_orders_a_list, get_order_a_snapshot, get_orders_map_list,
-    check_is_echo, update_event_action_result
+    check_is_echo, update_event_action_result,
+    get_order_mapping_by_a, get_order_mapping_by_b
 )
 from app.schemas import (
     WebhookResponse, HealthResponse, JobsListResponse, JobItem, RunJobsResponse,
@@ -106,6 +107,23 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
                 await update_event_action_result(event_id, "echo")
             logger.info(f"Echo detected: {source} venda {venda_id_int} {codigo_situacao_str} (ignored)")
             return JSONResponse(content={"ok": True, "status": "ignored", "reason": "echo"})
+
+        venda_str = str(venda_id_int)
+        if source == "A":
+            mapping = await get_order_mapping_by_a(venda_str)
+        else:
+            mapping = await get_order_mapping_by_b(venda_str)
+        if not mapping:
+            noop_payload = {
+                "source": source, "topic": topic,
+                "venda_id": venda_str, "codigo_situacao": codigo_situacao_str
+            }
+            dedupe_key = generate_dedupe_key(source, topic, venda_id_int, "noop", codigo_situacao=codigo_situacao_str)
+            await insert_job(job_type="noop", dedupe_key=dedupe_key, event_id=None, payload=noop_payload)
+            if event_id:
+                await update_event_action_result(event_id, "noop:no_orders_map")
+            logger.info(f"sync_status skipped: no orders_map for {source} venda {venda_id_int}")
+            return JSONResponse(content={"ok": True, "status": "ignored", "reason": "no_orders_map"})
     
     dedupe_key = generate_dedupe_key(source, topic, venda_id_int, job_type, codigo_situacao=codigo_situacao_str)
     

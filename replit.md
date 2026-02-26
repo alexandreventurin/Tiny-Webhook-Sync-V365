@@ -107,6 +107,12 @@ app/
 
 ## Job Flow
 
+### sync_status gate (router)
+- Antes de criar job `sync_status`, o router verifica se existe `orders_map` para o `venda_id`
+- Source A → busca por `venda_a_id`; Source B → busca por `venda_b_id`
+- Se não existir mapeamento → cria job `noop` com `action_result: "noop:no_orders_map"`
+- Pedidos de B que não foram originados em A são ignorados silenciosamente com rastreabilidade
+
 ### A/vendas aprovado
 1. Creates `fetch_order_a` job
 2. Worker processes `fetch_order_a`:

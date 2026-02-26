@@ -167,6 +167,7 @@ Mapeamento completo de formas de envio de A para B com suporte a formas de frete
 - `numeroOrdemCompra`: Source order number
 - `ecommerce.numeroPedidoEcommerce`: E-commerce reference
 - `observacoes`: Inclui dados de origem (forma de envio/frete original)
+- **Marcador**: Após criar o pedido, adiciona marcador "API Rejuderme" via `POST /pedidos/{id}/marcadores` (falha no marcador não impede o job de concluir)
 
 ## Running
 ```bash

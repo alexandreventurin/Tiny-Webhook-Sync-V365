@@ -478,6 +478,12 @@ async def process_job(job: dict) -> None:
             
             await upsert_orders_map_with_b(external_key=external_key, venda_a_id=str(venda_id), venda_b_id=venda_b_id)
             
+            tag_added = False
+            try:
+                tag_added = await client_b.add_order_tags(venda_b_id, ["API Rejuderme"])
+            except Exception as e:
+                logger.warning(f"Job {job_id}: failed to add tag to order {venda_b_id}: {e}")
+            
             action_preview = {
                 "would": "create_order_in_B",
                 "situacao_target": "em_aberto",
@@ -490,10 +496,11 @@ async def process_job(job: dict) -> None:
                 "forma_envio_origem": forma_envio_src,
                 "forma_frete_origem": forma_frete_src,
                 "volumes": volumes_src,
-                "created": True
+                "created": True,
+                "tag_added": tag_added
             }
             await update_job_done(job_id, action_preview)
-            logger.info(f"Job {job_id} completed: created order in B with id {venda_b_id} (envio={forma_envio_src}, frete={forma_frete_src})")
+            logger.info(f"Job {job_id} completed: created order in B with id {venda_b_id} (envio={forma_envio_src}, frete={forma_frete_src}, tag={tag_added})")
         
         elif job_type == 'fetch_order_a':
             if not venda_id:

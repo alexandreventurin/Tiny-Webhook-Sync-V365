@@ -107,6 +107,18 @@ class TinyClient:
                 raise TinyApiError(response.status_code, response.text, url)
         logger.info(f"Updated order {pedido_id} to situacao {situacao}")
     
+    async def add_order_tags(self, pedido_id: str, tags: list[str]) -> bool:
+        url = f"{self._base_url}/pedidos/{pedido_id}/marcadores"
+        body = [{"descricao": t} for t in tags]
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, headers=self._headers(), json=body)
+            if response.status_code == 204:
+                logger.info(f"Added tags {tags} to order {pedido_id}")
+                return True
+            else:
+                logger.warning(f"Failed to add tags to order {pedido_id}: {response.status_code} {response.text[:200]}")
+                return False
+
     async def list_all_products(self, limit: int = 100) -> list:
         url = f"{self._base_url}/produtos"
         all_products = []

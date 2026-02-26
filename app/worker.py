@@ -11,6 +11,7 @@ from app.db import (
     update_job_done,
     update_job_failed,
     update_job_skipped_not_mapped,
+    reschedule_job_with_backoff,
     upsert_orders_map,
     upsert_orders_a_snapshot,
     upsert_orders_a_fetched,
@@ -479,10 +480,17 @@ async def process_job(job: dict) -> None:
             await upsert_orders_map_with_b(external_key=external_key, venda_a_id=str(venda_id), venda_b_id=venda_b_id)
             
             tag_added = False
+            tag_job_created = False
             try:
                 tag_added = await client_b.add_order_tags(venda_b_id, ["API Rejuderme"])
             except Exception as e:
                 logger.warning(f"Job {job_id}: failed to add tag to order {venda_b_id}: {e}")
+            if not tag_added:
+                tag_dedupe = f"B:tag:{venda_b_id}:add_tag_b"
+                tag_payload = {"venda_b_id": venda_b_id, "tag": "API Rejuderme"}
+                tag_job_created = await insert_job(job_type="add_tag_b", dedupe_key=tag_dedupe, event_id=None, payload=tag_payload, delay_minutes=1)
+                if tag_job_created:
+                    logger.info(f"Job {job_id}: tag failed, created add_tag_b job for order {venda_b_id}")
             
             action_preview = {
                 "would": "create_order_in_B",
@@ -497,7 +505,8 @@ async def process_job(job: dict) -> None:
                 "forma_frete_origem": forma_frete_src,
                 "volumes": volumes_src,
                 "created": True,
-                "tag_added": tag_added
+                "tag_added": tag_added,
+                "tag_job_created": tag_job_created if not tag_added else None
             }
             await update_job_done(job_id, action_preview)
             logger.info(f"Job {job_id} completed: created order in B with id {venda_b_id} (envio={forma_envio_src}, frete={forma_frete_src}, tag={tag_added})")
@@ -699,6 +708,48 @@ async def process_job(job: dict) -> None:
             await update_job_done(job_id, action_preview)
             logger.info(f"Job {job_id} completed: sync_nf_link for NF {id_nota_fiscal}")
         
+        elif job_type == 'add_tag_b':
+            TAG_BACKOFF_MINUTES = [1, 3, 5]
+            TAG_MAX_RETRIES = len(TAG_BACKOFF_MINUTES)
+
+            tag_venda_b_id = payload.get('venda_b_id')
+            tag_text = payload.get('tag', 'API Rejuderme')
+
+            if not tag_venda_b_id:
+                await update_job_failed(job_id, "missing venda_b_id", attempts)
+                return
+
+            token_b = await ensure_access_token("B")
+            if not token_b:
+                if attempts <= TAG_MAX_RETRIES:
+                    delay = TAG_BACKOFF_MINUTES[attempts - 1]
+                    await reschedule_job_with_backoff(job_id, attempts, delay, "No valid OAuth token for B")
+                    logger.info(f"Job {job_id} add_tag_b rescheduled (attempt {attempts}, retry in {delay}min)")
+                else:
+                    await update_job_failed(job_id, "No valid OAuth token for B after retries", attempts)
+                return
+
+            client_b = TinyClient(token_b)
+            tag_ok = False
+            tag_error = ""
+            try:
+                tag_ok = await client_b.add_order_tags(tag_venda_b_id, [tag_text])
+            except Exception as e:
+                tag_error = str(e)
+                logger.warning(f"Job {job_id} add_tag_b failed: {e}")
+
+            if tag_ok:
+                action_preview = {"would": "add_tag_b", "venda_b_id": tag_venda_b_id, "tag": tag_text, "tag_added": True, "attempts": attempts}
+                await update_job_done(job_id, action_preview)
+                logger.info(f"Job {job_id} completed: add_tag_b for order {tag_venda_b_id} (attempt {attempts})")
+            elif attempts <= TAG_MAX_RETRIES:
+                delay = TAG_BACKOFF_MINUTES[attempts - 1]
+                await reschedule_job_with_backoff(job_id, attempts, delay, tag_error or "tag request failed")
+                logger.info(f"Job {job_id} add_tag_b rescheduled (attempt {attempts}/{TAG_MAX_RETRIES}, retry in {delay}min)")
+            else:
+                await update_job_failed(job_id, f"add_tag_b failed after {attempts} attempts: {tag_error}", attempts)
+                logger.warning(f"Job {job_id} add_tag_b gave up after {attempts} attempts for order {tag_venda_b_id}")
+
         elif job_type == 'noop':
             action_preview = {
                 "would": "noop",

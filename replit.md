@@ -127,6 +127,7 @@ app/
 - `create_order_b` - Create order in Tiny B (Em Aberto, somente depósito Dropshipping)
 - `sync_status` - Sync status changes (pronto_envio, entregue, cancelado, faturado, enviado)
 - `sync_nf_link` - Sync fiscal note links
+- `add_tag_b` - Adiciona marcador "API Rejuderme" ao pedido em B (retry com backoff: 1min, 3min, 5min)
 - `noop` - No operation
 
 ## Worker

@@ -167,6 +167,15 @@ async def init_db():
                 )
             """)
             
+            try:
+                await conn.execute("ALTER TABLE public.jobs DROP CONSTRAINT IF EXISTS jobs_job_type_check")
+                await conn.execute("""
+                    ALTER TABLE public.jobs ADD CONSTRAINT jobs_job_type_check
+                    CHECK (job_type = ANY (ARRAY['noop','create_order_b','sync_status','fetch_label','fetch_nf_link','sync_nf_link','fetch_order_a','add_tag_b']))
+                """)
+            except Exception:
+                pass
+
             await conn.execute("""
                 INSERT INTO public.feature_flags (key, enabled, functional, label, description) VALUES
                     ('replicate_orders', false, true, 'Replicar Pedidos', 'Cria pedidos em B quando A é aprovado'),
@@ -363,6 +372,25 @@ async def update_job_failed(job_id, error: str, attempts: int) -> None:
                 """, job_id, new_status)
             except Exception as e:
                 logger.error(f"Failed to update job failed status: {e}")
+
+
+async def reschedule_job_with_backoff(job_id, attempts: int, delay_minutes: int, last_error: str) -> None:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        try:
+            await conn.execute("""
+                UPDATE public.jobs
+                SET status = 'queued',
+                    attempts = $2,
+                    last_error = $3,
+                    last_attempt_at = NOW(),
+                    run_after = NOW() + ($4::int || ' minutes')::interval,
+                    locked_at = NULL,
+                    locked_by = NULL
+                WHERE id = $1
+            """, job_id, attempts, last_error, delay_minutes)
+        except Exception as e:
+            logger.error(f"Failed to reschedule job {job_id}: {e}")
 
 
 async def upsert_orders_map(external_key: str, venda_a_id: str | None) -> None:

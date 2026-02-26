@@ -67,6 +67,8 @@ SKU_ALIAS = {
     "Rosto-5": "Rosto-5too",
 }
 
+DROPSHIPPING_DEPOSIT_ID = 336403602
+
 DEST1_FE_SEDEX_ID = 846978945
 DEST1_FE_FM_ID = 895824123
 DEST1_FE_PAC_ID = 971399662
@@ -291,6 +293,30 @@ async def process_job(job: dict) -> None:
                 fetched_payload = json.loads(fetched_payload)
             
             order_data = fetched_payload or {}
+
+            if not order_data:
+                await update_job_failed(job_id, "fetched_payload missing, cannot verify deposit", attempts)
+                logger.warning(f"Job {job_id} failed: no fetched_payload for venda {venda_id}")
+                return
+
+            deposito = order_data.get('deposito') or {}
+            deposito_id = deposito.get('id')
+            deposito_nome = deposito.get('nome', '')
+            if deposito_id != DROPSHIPPING_DEPOSIT_ID:
+                action_preview = {
+                    "would": "create_order_in_B",
+                    "skipped": True,
+                    "reason": "deposit_not_allowed",
+                    "venda_a_id": venda_id,
+                    "deposito_id": deposito_id,
+                    "deposito_nome": deposito_nome,
+                    "expected_deposit_id": DROPSHIPPING_DEPOSIT_ID,
+                    "note": f"Depósito '{deposito_nome}' não é Dropshipping (Muy Bela)"
+                }
+                await update_job_done(job_id, action_preview)
+                logger.info(f"Job {job_id} skipped: deposit_not_allowed (deposito={deposito_nome}, id={deposito_id})")
+                return
+
             cliente = order_data.get('cliente') or {}
             endereco = order_data.get('enderecoEntrega') or order_data.get('endereco') or cliente.get('endereco') or {}
             itens_a = order_data.get('itens') or []

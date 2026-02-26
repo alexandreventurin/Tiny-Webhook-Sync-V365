@@ -115,13 +115,16 @@ app/
    - Saves fetched_payload and fetched_at
    - Creates chained `create_order_b` job
 3. Worker processes `create_order_b`:
+   - **Gate Depósito**: Verifica `deposito.id` no fetched_payload
+     - Se `deposito.id != 336403602` (Dropshipping Muy Bela) → skipped com reason `deposit_not_allowed`
+     - Se `fetched_payload` ausente → failed (não pode verificar depósito)
    - If EXECUTE_TINY_B=false: dry-run with action_preview
-   - If EXECUTE_TINY_B=true: calls POST /pedidos with situacao=8
+   - If EXECUTE_TINY_B=true: calls POST /pedidos (Em Aberto)
    - Saves venda_b_id to orders_map
 
 ## Job Types
 - `fetch_order_a` - Fetch order details from Tiny A
-- `create_order_b` - Create order in Tiny B (situacao=8)
+- `create_order_b` - Create order in Tiny B (Em Aberto, somente depósito Dropshipping)
 - `sync_status` - Sync status changes (pronto_envio, entregue, cancelado, faturado, enviado)
 - `sync_nf_link` - Sync fiscal note links
 - `noop` - No operation

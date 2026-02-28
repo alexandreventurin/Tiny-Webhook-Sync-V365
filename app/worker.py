@@ -888,10 +888,11 @@ async def run_worker_once_detailed(limit: int = 50) -> dict:
     return {"locked": locked, "done": done, "failed": failed, "dead": dead}
 
 
-TOKEN_REFRESH_INTERVAL_HOURS = 12
+TOKEN_REFRESH_MARGIN_MINUTES = 30
+TOKEN_CHECK_INTERVAL_SECONDS = 600
 
 async def maybe_refresh_tokens():
-    """Renova tokens proativamente. Se expirado ou updated_at > 12h, força refresh."""
+    """Renova tokens proativamente. Faz refresh se expirado, expirando em breve (<30min), ou updated_at > 3h."""
     try:
         from app.tiny_oauth import get_tokens_from_db, ensure_access_token
         for account in ("A", "B"):
@@ -909,11 +910,15 @@ async def maybe_refresh_tokens():
                 if expires_at <= now:
                     needs_refresh = True
                     reason = "expired"
+                elif (expires_at - now).total_seconds() < TOKEN_REFRESH_MARGIN_MINUTES * 60:
+                    needs_refresh = True
+                    remaining_min = int((expires_at - now).total_seconds() / 60)
+                    reason = f"expiring soon ({remaining_min}min left)"
             if not needs_refresh and updated_at:
                 if hasattr(updated_at, 'tzinfo') and updated_at.tzinfo is None:
                     updated_at = updated_at.replace(tzinfo=timezone.utc)
                 age_hours = (now - updated_at).total_seconds() / 3600
-                if age_hours > TOKEN_REFRESH_INTERVAL_HOURS:
+                if age_hours > 3:
                     needs_refresh = True
                     reason = f"stale (updated {age_hours:.1f}h ago)"
             if needs_refresh:
@@ -947,7 +952,7 @@ async def worker_loop():
             logger.error(f"Worker error: {e}")
         
         now = datetime.now(timezone.utc)
-        if _last_token_check is None or (now - _last_token_check).total_seconds() > 3600:
+        if _last_token_check is None or (now - _last_token_check).total_seconds() > TOKEN_CHECK_INTERVAL_SECONDS:
             _last_token_check = now
             await maybe_refresh_tokens()
         

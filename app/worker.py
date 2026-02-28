@@ -889,7 +889,7 @@ async def run_worker_once_detailed(limit: int = 50) -> dict:
 
 
 TOKEN_REFRESH_MARGIN_MINUTES = 30
-TOKEN_CHECK_INTERVAL_SECONDS = 600
+TOKEN_CHECK_INTERVAL_SECONDS = 1800
 
 async def maybe_refresh_tokens():
     """Renova tokens proativamente. Faz refresh se expirado, expirando em breve (<30min), ou updated_at > 3h."""

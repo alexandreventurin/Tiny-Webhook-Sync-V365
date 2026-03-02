@@ -584,7 +584,7 @@ async def admin_jobs_dashboard(limit: int = 10, status: str | None = None, job_t
     limit = min(limit, 50)
     p = await get_pool()
     async with p.acquire() as conn:
-        query = "SELECT id, job_type, status, created_at, updated_at, action_preview, last_error, attempts FROM public.jobs"
+        query = "SELECT id, job_type, status, created_at, updated_at, action_preview, last_error, attempts, payload FROM public.jobs"
         conditions = []
         args = []
         idx = 1
@@ -611,11 +611,12 @@ async def admin_jobs_dashboard(limit: int = 10, status: str | None = None, job_t
             for k in ("created_at", "updated_at"):
                 if d.get(k) and hasattr(d[k], "isoformat"):
                     d[k] = d[k].isoformat()
-            if d.get("action_preview") and not isinstance(d["action_preview"], (dict, list)):
-                try:
-                    d["action_preview"] = json.loads(str(d["action_preview"]))
-                except Exception:
-                    pass
+            for jk in ("action_preview", "payload"):
+                if d.get(jk) and not isinstance(d[jk], (dict, list)):
+                    try:
+                        d[jk] = json.loads(str(d[jk]))
+                    except Exception:
+                        pass
             jobs.append(d)
         return {"jobs": jobs}
 

@@ -74,6 +74,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .job-type{font-family:monospace;font-size:12px;color:#555}
 .job-preview{font-size:11px;color:#888;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .job-error{font-size:11px;color:#dc2626;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.jobs-table tbody tr.job-row{cursor:pointer}
+.job-detail-row td{background:#f0f4f8;padding:10px 14px !important;border-bottom:1px solid #e2e8f0}
+.job-detail-row pre{margin:0;font-size:11px;font-family:monospace;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;color:#334155;line-height:1.5}
+.job-detail-row .detail-label{font-size:11px;font-weight:600;color:#64748b;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px}
 .auto-refresh{font-size:11px;color:#888;display:flex;align-items:center;gap:4px}
 .auto-refresh .dot{width:6px;height:6px;border-radius:50%;background:#22c55e;display:inline-block}
 .empty-state{text-align:center;padding:24px;color:#aaa;font-size:14px}
@@ -247,7 +251,8 @@ function previewText(job) {
     return `<span class="job-error" title="${escHtml(job.last_error)}">${escHtml(truncate(job.last_error, 60))}</span>`;
   }
   if (job.action_preview) {
-    const ap = typeof job.action_preview === 'string' ? JSON.parse(job.action_preview) : job.action_preview;
+    let ap = job.action_preview;
+    if (typeof ap === 'string') { try { ap = JSON.parse(ap); } catch(e) { return `<span class="job-preview">${escHtml(truncate(ap, 50))}</span>`; } }
     if (ap.skipped) return `<span class="job-preview" title="${escHtml(ap.reason||'')}">${escHtml(ap.reason||'skipped')}</span>`;
     if (ap.dry_run) return `<span class="job-preview">dry-run</span>`;
     if (ap.done || ap.created) {
@@ -263,6 +268,37 @@ function previewText(job) {
 
 function escHtml(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 function truncate(s, n) { return s && s.length > n ? s.substring(0, n) + '...' : s || ''; }
+
+function toggleJobDetail(row, idx) {
+  const next = row.nextElementSibling;
+  if (next && next.classList.contains('job-detail-row')) {
+    next.remove();
+    return;
+  }
+  const j = (window._lastJobs || [])[idx];
+  if (!j) return;
+  const parts = [];
+  if (j.action_preview) {
+    const ap = typeof j.action_preview === 'string' ? j.action_preview : JSON.stringify(j.action_preview, null, 2);
+    let formatted;
+    try { formatted = JSON.stringify(JSON.parse(ap), null, 2); } catch(e) { formatted = ap; }
+    parts.push('<div class="detail-label">Detalhe</div><pre>' + escHtml(formatted) + '</pre>');
+  }
+  if (j.last_error) {
+    parts.push('<div class="detail-label" style="margin-top:8px">Erro</div><pre style="color:#dc2626">' + escHtml(j.last_error) + '</pre>');
+  }
+  if (j.payload) {
+    const pl = typeof j.payload === 'string' ? j.payload : JSON.stringify(j.payload, null, 2);
+    let formatted;
+    try { formatted = JSON.stringify(JSON.parse(pl), null, 2); } catch(e) { formatted = pl; }
+    parts.push('<div class="detail-label" style="margin-top:8px">Payload</div><pre>' + escHtml(formatted) + '</pre>');
+  }
+  if (parts.length === 0) parts.push('<pre style="color:#aaa">Sem detalhes</pre>');
+  const detail = document.createElement('tr');
+  detail.className = 'job-detail-row';
+  detail.innerHTML = '<td colspan="5">' + parts.join('') + '</td>';
+  row.after(detail);
+}
 
 async function loadAuth() {
   try {
@@ -401,8 +437,8 @@ async function loadJobs() {
     const data = await res.json();
     let jobs = data.jobs || [];
     if (jobs.length > 0) {
-      tbody.innerHTML = jobs.map(j => `
-        <tr>
+      tbody.innerHTML = jobs.map((j, i) => `
+        <tr class="job-row" onclick="toggleJobDetail(this, ${i})">
           <td>${j.id}</td>
           <td><span class="job-type">${j.job_type}</span></td>
           <td>${statusBadge(j.status)}</td>
@@ -410,6 +446,7 @@ async function loadJobs() {
           <td style="white-space:nowrap;color:#888;font-size:12px">${timeAgo(j.updated_at || j.created_at)}</td>
         </tr>
       `).join('');
+      window._lastJobs = jobs;
     } else {
       tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Nenhum job</td></tr>';
     }

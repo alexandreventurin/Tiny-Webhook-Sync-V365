@@ -35,6 +35,20 @@ class TinyClient:
             "Content-Type": "application/json"
         }
     
+    async def ping_light(self) -> TinyPingResult:
+        url = f"{self._base_url}/contatos"
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(url, headers=self._headers(), params={"limite": 1})
+                if response.status_code == 200:
+                    return TinyPingResult(ok=True, status_code=200)
+                else:
+                    return TinyPingResult(ok=False, status_code=response.status_code, error=response.text[:200])
+        except httpx.TimeoutException:
+            return TinyPingResult(ok=False, status_code=0, error="timeout")
+        except Exception as e:
+            return TinyPingResult(ok=False, status_code=0, error=str(e)[:200])
+
     async def ping_order(self, pedido_id: str) -> TinyPingResult:
         url = f"{self._base_url}/pedidos/{pedido_id}"
         try:

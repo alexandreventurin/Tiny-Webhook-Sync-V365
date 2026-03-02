@@ -74,6 +74,7 @@ app/
 - `GET /admin/tiny_a/ping?venda_id=XXXXX` - Test Tiny A auth (GET /pedidos/{id})
 - `GET /admin/tiny_b/ping?venda_id=XXXXX` - Test Tiny B auth (GET /pedidos/{id})
 - `GET /admin/tokens` - List OAuth token status (A/B) without exposing secrets
+- `GET /admin/tokens/health` - Ping real das APIs A e B (GET /contatos?limite=1, timeout 5s) — dashboard usa para mostrar status real
 
 ### Product Mapping
 - `GET /admin/tiny_a/produtos` - List all products from Tiny A with mapping status

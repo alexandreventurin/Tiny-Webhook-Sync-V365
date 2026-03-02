@@ -302,8 +302,15 @@ function toggleJobDetail(row, idx) {
 
 async function loadAuth() {
   try {
-    const res = await fetch(API + '/admin/tokens');
-    const data = await res.json();
+    const [tokensRes, healthRes] = await Promise.all([
+      fetch(API + '/admin/tokens'),
+      fetch(API + '/admin/tokens/health').catch(() => null)
+    ]);
+    const data = await tokensRes.json();
+    let health = {};
+    if (healthRes && healthRes.ok) {
+      try { health = await healthRes.json(); } catch(e) {}
+    }
     const bar = document.getElementById('authBar');
     const accounts = {A: null, B: null};
     (data.tokens || []).forEach(t => { accounts[t.account] = t; });
@@ -311,24 +318,37 @@ async function loadAuth() {
     const authPaths = {A: '/auth/a/start', B: '/auth/b/start'};
     bar.innerHTML = ['A','B'].map(acc => {
       const t = accounts[acc];
+      const h = health[acc];
       if (!t) {
         return `<div class="auth-card missing"><div class="auth-left"><div class="auth-dot"></div><div><div class="auth-name">${labels[acc]}</div><div class="auth-detail">Nenhum token cadastrado</div></div></div><a href="${authPaths[acc]}" class="auth-link" target="_blank">Conectar</a></div>`;
       }
       const now = new Date();
       const expires = t.expires_at ? new Date(t.expires_at) : null;
-      const valid = expires && expires > now;
-      const cls = valid ? 'ok' : 'expired';
-      const statusText = valid ? 'Conectado' : 'Expirado';
-      let detail;
-      if (valid) {
+      const localValid = expires && expires > now;
+      const apiOk = h ? h.ok : null;
+      let cls, statusText, detail;
+      if (!localValid) {
+        cls = 'expired';
+        statusText = 'Expirado';
+        detail = expires ? 'Expirou ' + timeAgo(expires.toISOString()) : 'Token expirado';
+      } else if (apiOk === false) {
+        cls = 'expired';
+        if (h && h.status_code === 401) {
+          statusText = 'Token Inv\u00e1lido';
+          detail = 'API rejeitou o token (401)';
+        } else {
+          statusText = 'Falha na Conex\u00e3o';
+          detail = h && h.error ? h.error : 'N\u00e3o foi poss\u00edvel validar';
+        }
+      } else {
+        cls = 'ok';
+        statusText = 'Conectado';
         const remaining = Math.floor((expires - now) / 1000);
         if (remaining < 3600) detail = 'Expira em ' + Math.floor(remaining/60) + 'min';
         else if (remaining < 86400) detail = 'Expira em ' + Math.floor(remaining/3600) + 'h';
         else detail = 'Expira em ' + Math.floor(remaining/86400) + 'd';
-      } else {
-        detail = expires ? 'Expirou ' + timeAgo(expires.toISOString()) : 'Token expirado';
       }
-      const linkText = valid ? 'Reconectar' : 'Reconectar agora';
+      const linkText = cls === 'ok' ? 'Reconectar' : 'Reconectar agora';
       return `<div class="auth-card ${cls}"><div class="auth-left"><div class="auth-dot"></div><div><div class="auth-name">${labels[acc]}</div><div class="auth-detail">${statusText} &middot; ${detail}</div></div></div><a href="${authPaths[acc]}" class="auth-link" target="_blank">${linkText}</a></div>`;
     }).join('');
   } catch(e) {

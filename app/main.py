@@ -550,6 +550,28 @@ async def admin_tokens():
     return {"tokens": tokens}
 
 
+@app.get("/admin/tokens/health")
+async def admin_tokens_health():
+    from app.tiny_oauth import ensure_access_token
+    from app.tiny_client import TinyClient
+    import asyncio
+    results = {}
+    async def check_account(account):
+        try:
+            token = await ensure_access_token(account)
+            if not token:
+                return {"ok": False, "error": "no_token"}
+            client = TinyClient(token)
+            ping = await client.ping_light()
+            return {"ok": ping.ok, "status_code": ping.status_code, "error": ping.error}
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:200]}
+    results["A"], results["B"] = await asyncio.gather(
+        check_account("A"), check_account("B")
+    )
+    return results
+
+
 @app.get("/dashboard")
 async def dashboard():
     html_path = Path(__file__).parent / "static" / "dashboard.html"

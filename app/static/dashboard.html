@@ -232,6 +232,7 @@ function statusBadge(status) {
 function actionBadge(action_result) {
   if (!action_result) return '';
   if (action_result === 'echo') return '<span class="ev-action act-echo">Eco</span>';
+  if (action_result === 'noop:no_orders_map') return '<span class="ev-action act-noop" title="Pedido sem mapeamento A\u2194B">Sem par</span>';
   if (action_result === 'noop') return '<span class="ev-action act-noop">Ignorado</span>';
   if (action_result.startsWith('job:')) {
     const jt = action_result.replace('job:', '');

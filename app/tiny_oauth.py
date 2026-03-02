@@ -147,6 +147,29 @@ async def ensure_access_token(account: str) -> Optional[str]:
         return None
 
 
+async def force_refresh_token(account: str) -> Optional[str]:
+    tokens = await get_tokens_from_db(account)
+    if not tokens or not tokens.get("refresh_token"):
+        logger.warning(f"No refresh_token for account {account}, cannot force refresh")
+        return None
+    refresh_tok = tokens["refresh_token"]
+    logger.info(f"Force-refreshing token for account {account}")
+    try:
+        new_tokens = await refresh_access_token(account, refresh_tok)
+        new_access = new_tokens.get("access_token")
+        new_refresh = new_tokens.get("refresh_token") or refresh_tok
+        new_expires_in = new_tokens.get("expires_in", 3600)
+        if not new_access:
+            logger.error(f"No access_token in force-refresh response for {account}")
+            return None
+        await save_tokens_to_db(account, new_access, new_refresh, new_expires_in)
+        logger.info(f"Token force-refreshed for account {account}")
+        return new_access
+    except Exception as e:
+        logger.error(f"Force-refresh failed for account {account}: {e}")
+        return None
+
+
 async def list_token_status() -> list[dict]:
     from app.db import get_pool
     p = await get_pool()

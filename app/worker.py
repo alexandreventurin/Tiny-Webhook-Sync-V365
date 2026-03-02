@@ -35,12 +35,27 @@ from app.settings import (
     MAX_ORDERS_TO_REPLICATE
 )
 from app.tiny_client import TinyClient, TinyApiError
-from app.tiny_oauth import ensure_access_token
+from app.tiny_oauth import ensure_access_token, force_refresh_token
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 WORKER_BUILD = "2026-02-04-005"
+
+async def call_tiny(account: str, client: TinyClient, method: str, *args, **kwargs):
+    """Call a TinyClient method with automatic 401 retry (force-refresh + retry once)."""
+    try:
+        return await getattr(client, method)(*args, **kwargs)
+    except TinyApiError as e:
+        if e.status_code != 401:
+            raise
+        logger.warning(f"Got 401 on {method} for account {account}, force-refreshing token...")
+        new_token = await force_refresh_token(account)
+        if not new_token:
+            raise
+        new_client = TinyClient(new_token)
+        return await getattr(new_client, method)(*args, **kwargs)
+
 
 PRODUTO_ID_MAP: dict[int, int] = {}
 _products_map_loaded = False
@@ -367,7 +382,7 @@ async def process_job(job: dict) -> None:
             id_contato_b = None
             contact_created = False
             try:
-                contacts = await client_b.search_contacts(cpf_cnpj)
+                contacts = await call_tiny("B", client_b, "search_contacts", cpf_cnpj)
                 if contacts:
                     id_contato_b = contacts[0].get('id')
                     logger.info(f"Found existing contact in B: {id_contato_b}")
@@ -397,7 +412,7 @@ async def process_job(job: dict) -> None:
                     contact_payload['endereco'] = {k: v for k, v in contact_payload['endereco'].items() if v is not None}
                 
                 try:
-                    contact_result = await client_b.create_contact(contact_payload)
+                    contact_result = await call_tiny("B", client_b, "create_contact", contact_payload)
                     id_contato_b = contact_result.get('id')
                     contact_created = True
                     logger.info(f"Created contact in B: {id_contato_b}")
@@ -474,7 +489,7 @@ async def process_job(job: dict) -> None:
             order_payload_b = {k: v for k, v in order_payload_b.items() if v is not None}
             
             logger.info(f"create_order_b payload for venda {venda_id}: {json.dumps(order_payload_b, default=str)}")
-            result = await client_b.create_order(order_payload_b)
+            result = await call_tiny("B", client_b, "create_order", order_payload_b)
             venda_b_id = str(result.get('id') or result.get('numeroPedido') or '')
             
             await upsert_orders_map_with_b(external_key=external_key, venda_a_id=str(venda_id), venda_b_id=venda_b_id)
@@ -482,7 +497,7 @@ async def process_job(job: dict) -> None:
             tag_added = False
             tag_job_created = False
             try:
-                tag_added = await client_b.add_order_tags(venda_b_id, ["API Rejuderme"])
+                tag_added = await call_tiny("B", client_b, "add_order_tags", venda_b_id, ["API Rejuderme"])
             except Exception as e:
                 logger.warning(f"Job {job_id}: failed to add tag to order {venda_b_id}: {e}")
             if not tag_added:
@@ -571,21 +586,21 @@ async def process_job(job: dict) -> None:
             
             client_a = TinyClient(token_a)
             try:
-                fetched_data = await client_a.get_order_details(str(venda_id))
-                await upsert_orders_a_fetched(venda_a_id=str(venda_id), fetched_payload=fetched_data)
-                
-                action_preview = {
-                    "would": "fetch_order_a",
-                    "venda_a_id": venda_id,
-                    "fetched": True,
-                    "note": "fetched from Tiny A"
-                }
-                await update_job_done(job_id, action_preview)
-                logger.info(f"Job {job_id} completed: fetch_order_a for venda {venda_id}")
+                fetched_data = await call_tiny("A", client_a, "get_order_details", str(venda_id))
             except TinyApiError as e:
                 await upsert_orders_a_fetch_error(venda_a_id=str(venda_id), status_code=e.status_code, error_body=e.body)
                 logger.error(f"Job {job_id} fetch_order_a failed: {e.status_code} {e.body[:100]}")
                 raise
+            
+            await upsert_orders_a_fetched(venda_a_id=str(venda_id), fetched_payload=fetched_data)
+            action_preview = {
+                "would": "fetch_order_a",
+                "venda_a_id": venda_id,
+                "fetched": True,
+                "note": "fetched from Tiny A"
+            }
+            await update_job_done(job_id, action_preview)
+            logger.info(f"Job {job_id} completed: fetch_order_a for venda {venda_id}")
             
             create_order_dedupe_key = f"A:vendas:{venda_id}:create_order_b"
             create_order_payload = {
@@ -669,7 +684,7 @@ async def process_job(job: dict) -> None:
             
             client_target = TinyClient(target_token)
             
-            await client_target.update_order_status(target_id, situacao_int)
+            await call_tiny(target_source, client_target, "update_order_status", target_id, situacao_int)
             
             if source == "A":
                 await update_orders_map_sync(str(venda_id), target_id, codigo_situacao)
@@ -707,7 +722,7 @@ async def process_job(job: dict) -> None:
                 return
 
             client_b = TinyClient(token_b)
-            nf_data = await client_b.get_nota_fiscal(id_nota_fiscal)
+            nf_data = await call_tiny("B", client_b, "get_nota_fiscal", id_nota_fiscal)
             logger.info(f"Job {job_id}: fetched NF {id_nota_fiscal}, keys: {list(nf_data.keys())}")
 
             nf_numero = nf_data.get("numero") or ""
@@ -743,7 +758,7 @@ async def process_job(job: dict) -> None:
                 return
 
             client_a = TinyClient(token_a)
-            order_a = await client_a.get_order_details(venda_a_id)
+            order_a = await call_tiny("A", client_a, "get_order_details", venda_a_id)
             obs_atual = order_a.get("observacoes") or ""
 
             nf_block = (
@@ -764,7 +779,7 @@ async def process_job(job: dict) -> None:
             else:
                 nova_obs = nf_block
 
-            await client_a.update_order(venda_a_id, {"observacoes": nova_obs})
+            await call_tiny("A", client_a, "update_order", venda_a_id, {"observacoes": nova_obs})
 
             action_preview = {
                 "would": "sync_nf_link",
@@ -804,7 +819,7 @@ async def process_job(job: dict) -> None:
             tag_ok = False
             tag_error = ""
             try:
-                tag_ok = await client_b.add_order_tags(tag_venda_b_id, [tag_text])
+                tag_ok = await call_tiny("B", client_b, "add_order_tags", tag_venda_b_id, [tag_text])
             except Exception as e:
                 tag_error = str(e)
                 logger.warning(f"Job {job_id} add_tag_b failed: {e}")

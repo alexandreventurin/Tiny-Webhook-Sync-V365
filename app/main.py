@@ -601,7 +601,7 @@ async def admin_set_flag(request: Request):
 
 
 @app.get("/admin/jobs-dashboard")
-async def admin_jobs_dashboard(limit: int = 10, status: str | None = None, job_type: str | None = None, exclude_status: str | None = None):
+async def admin_jobs_dashboard(limit: int = 10, status: str | None = None, job_type: str | None = None, exclude_status: str | None = None, exclude_noop: bool = False):
     from app.db import get_pool
     limit = min(limit, 50)
     p = await get_pool()
@@ -618,6 +618,8 @@ async def admin_jobs_dashboard(limit: int = 10, status: str | None = None, job_t
             conditions.append(f"status != ${idx}")
             args.append(exclude_status)
             idx += 1
+        if exclude_noop and not status:
+            conditions.append("job_type != 'noop'")
         if job_type:
             conditions.append(f"job_type = ${idx}")
             args.append(job_type)

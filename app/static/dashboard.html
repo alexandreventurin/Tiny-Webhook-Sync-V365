@@ -154,7 +154,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       <div class="section-filters">
         <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:4px;cursor:pointer">
           <input type="checkbox" id="hideNotMapped" checked onchange="loadJobs()" style="cursor:pointer">
-          Ocultar not_mapped
+          Ocultar sem par
         </label>
         <select class="filter-select" id="jobsLimit" onchange="loadJobs()">
           <option value="5">5</option>
@@ -254,6 +254,7 @@ function previewText(job) {
   if (job.action_preview) {
     let ap = job.action_preview;
     if (typeof ap === 'string') { try { ap = JSON.parse(ap); } catch(e) { return `<span class="job-preview">${escHtml(truncate(ap, 50))}</span>`; } }
+    if (job.job_type === 'noop' && ap.would === 'noop') return '<span class="job-preview" title="Pedido sem mapeamento A\u2194B" style="color:#9ca3af">Sem par</span>';
     if (ap.skipped) return `<span class="job-preview" title="${escHtml(ap.reason||'')}">${escHtml(ap.reason||'skipped')}</span>`;
     if (ap.dry_run) return `<span class="job-preview">dry-run</span>`;
     if (ap.done || ap.created) {
@@ -457,6 +458,14 @@ async function loadJobs() {
     const res = await fetch(API + '/admin/jobs-dashboard?' + params.toString());
     const data = await res.json();
     let jobs = data.jobs || [];
+    if (hideNotMapped && !status) {
+      jobs = jobs.filter(j => {
+        if (j.job_type !== 'noop') return true;
+        let ap = j.action_preview;
+        if (typeof ap === 'string') { try { ap = JSON.parse(ap); } catch(e) { return true; } }
+        return !(ap && ap.would === 'noop');
+      });
+    }
     if (jobs.length > 0) {
       tbody.innerHTML = jobs.map((j, i) => `
         <tr class="job-row" onclick="toggleJobDetail(this, ${i})">

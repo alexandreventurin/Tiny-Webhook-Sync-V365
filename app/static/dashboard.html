@@ -461,6 +461,14 @@ async function loadJobs() {
     const res = await fetch(API + '/admin/jobs-dashboard?' + params.toString());
     const data = await res.json();
     let jobs = data.jobs || [];
+    if (hideNotMapped) {
+      jobs = jobs.filter(j => {
+        if (j.job_type !== 'noop') return true;
+        let ap = j.action_preview;
+        if (typeof ap === 'string') { try { ap = JSON.parse(ap); } catch(e) { return true; } }
+        return !(ap && ap.would === 'noop');
+      });
+    }
     if (jobs.length > 0) {
       tbody.innerHTML = jobs.map((j, i) => `
         <tr class="job-row" onclick="toggleJobDetail(this, ${i})">

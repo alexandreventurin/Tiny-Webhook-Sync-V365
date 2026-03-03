@@ -21,6 +21,7 @@ from app.db import (
     get_snapshot_fetched_at,
     get_order_mapping_by_a,
     get_order_mapping_by_b,
+    get_venda_b_by_nota_fiscal,
     insert_job,
     reset_stale_locks,
     count_orders_replicated_to_b,
@@ -716,28 +717,34 @@ async def process_job(job: dict) -> None:
                 await update_job_failed(job_id, "missing id_nota_fiscal", attempts)
                 return
 
-            token_b = await ensure_access_token("B")
-            if not token_b:
-                await update_job_failed(job_id, "No valid OAuth token for B", attempts)
-                return
+            nf_numero = str(payload.get("nf_numero") or "")
+            nf_serie = str(payload.get("nf_serie") or "")
+            nf_chave_acesso = payload.get("nf_chave_acesso") or ""
+            nf_data_emissao = payload.get("nf_data_emissao") or ""
+            nf_protocolo = ""
+            nf_data_autorizacao = ""
+            nf_source = "webhook"
 
-            client_b = TinyClient(token_b)
-            nf_data = await call_tiny("B", client_b, "get_nota_fiscal", id_nota_fiscal)
-            logger.info(f"Job {job_id}: fetched NF {id_nota_fiscal}, keys: {list(nf_data.keys())}")
+            if not nf_chave_acesso:
+                logger.info(f"Job {job_id}: NF data not in payload, trying event fallback")
+                from app.db import get_nf_event_payload
+                ev_payload = await get_nf_event_payload(id_nota_fiscal)
+                if ev_payload:
+                    ev_dados = ev_payload.get("dados") or {}
+                    nf_numero = str(ev_dados.get("numero") or "")
+                    nf_serie = str(ev_dados.get("serie") or "")
+                    nf_chave_acesso = ev_dados.get("chaveAcesso") or ev_dados.get("chave_acesso") or ""
+                    nf_source = "event_fallback"
+                if not nf_chave_acesso:
+                    await update_job_failed(job_id, f"No NF data in payload or events for id_nota_fiscal={id_nota_fiscal}", attempts)
+                    return
 
-            nf_numero = nf_data.get("numero") or ""
-            nf_serie = nf_data.get("serie") or ""
-            nf_chave_acesso = nf_data.get("chaveAcesso") or ""
-            nf_protocolo = nf_data.get("protocolo") or ""
-            nf_data_autorizacao = nf_data.get("dataAutorizacao") or ""
-
-            nf_pedido = nf_data.get("pedido") or {}
-            venda_b_id_nf = str(nf_pedido.get("id") or "") if nf_pedido.get("id") else None
+            venda_b_id_nf = await get_venda_b_by_nota_fiscal(id_nota_fiscal)
 
             if not venda_b_id_nf:
-                action_preview = {"would": "sync_nf_link", "skipped": True, "reason": "nf_has_no_pedido", "id_nota_fiscal": id_nota_fiscal}
+                action_preview = {"would": "sync_nf_link", "skipped": True, "reason": "no_vendas_event_for_nf", "id_nota_fiscal": id_nota_fiscal}
                 await update_job_done(job_id, action_preview)
-                logger.info(f"Job {job_id}: NF {id_nota_fiscal} has no linked pedido, skipping")
+                logger.info(f"Job {job_id}: no B/vendas event with id_nota_fiscal={id_nota_fiscal}, skipping")
                 return
 
             mapping = await get_order_mapping_by_b(venda_b_id_nf)
@@ -761,12 +768,14 @@ async def process_job(job: dict) -> None:
             order_a = await call_tiny("A", client_a, "get_order_details", venda_a_id)
             obs_atual = order_a.get("observacoes") or ""
 
-            nf_block = (
-                f"NF {nf_numero} - {nf_serie} | CHAVE DE ACESSO\n"
-                f"{nf_chave_acesso}\n"
-                f"PROTOCOLO DE AUTORIZAÇÃO DE USO\n"
-                f"{nf_protocolo} - {nf_data_autorizacao}"
-            )
+            nf_block_lines = [
+                f"NF {nf_numero} - {nf_serie} | CHAVE DE ACESSO",
+                nf_chave_acesso,
+            ]
+            if nf_protocolo or nf_data_autorizacao:
+                nf_block_lines.append("PROTOCOLO DE AUTORIZAÇÃO DE USO")
+                nf_block_lines.append(f"{nf_protocolo} - {nf_data_autorizacao}")
+            nf_block = "\n".join(nf_block_lines)
 
             if nf_chave_acesso and nf_chave_acesso in obs_atual:
                 action_preview = {"would": "sync_nf_link", "skipped": True, "reason": "nf_already_in_obs", "venda_a_id": venda_a_id, "nf_numero": nf_numero}
@@ -790,9 +799,10 @@ async def process_job(job: dict) -> None:
                 "nf_numero": nf_numero,
                 "nf_serie": nf_serie,
                 "nf_chave_acesso": nf_chave_acesso[:20] + "..." if len(nf_chave_acesso) > 20 else nf_chave_acesso,
+                "nf_source": nf_source,
             }
             await update_job_done(job_id, action_preview)
-            logger.info(f"Job {job_id} completed: sync_nf_link NF {nf_numero} for A:{venda_a_id} (from B:{venda_b_id_nf})")
+            logger.info(f"Job {job_id} completed: sync_nf_link NF {nf_numero} for A:{venda_a_id} (from B:{venda_b_id_nf}, source={nf_source})")
         
         elif job_type == 'add_tag_b':
             TAG_BACKOFF_MINUTES = [1, 3, 5]

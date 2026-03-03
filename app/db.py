@@ -600,6 +600,41 @@ async def get_order_mapping_by_a(venda_a_id: str) -> dict | None:
         return dict(row) if row else None
 
 
+async def get_nf_event_payload(id_nota_fiscal: str) -> dict | None:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT payload
+            FROM public.events
+            WHERE source = 'B' AND topic = 'notas_fiscais'
+              AND id_nota_fiscal = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, id_nota_fiscal)
+        if row and row["payload"]:
+            import json
+            try:
+                return json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
+            except (json.JSONDecodeError, TypeError):
+                return None
+        return None
+
+
+async def get_venda_b_by_nota_fiscal(id_nota_fiscal: str) -> str | None:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT venda_id
+            FROM public.events
+            WHERE source = 'B' AND topic = 'vendas'
+              AND id_nota_fiscal = $1
+              AND venda_id IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, id_nota_fiscal)
+        return str(row["venda_id"]) if row else None
+
+
 async def get_order_mapping_by_b(venda_b_id: str) -> dict | None:
     p = await get_pool()
     async with p.acquire() as conn:

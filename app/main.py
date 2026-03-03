@@ -201,13 +201,24 @@ async def webhook_b_notas_fiscais(request: Request):
     job_type = "sync_nf_link"
     dedupe_key = f"B:notas_fiscais:{id_nota_fiscal_str}:{job_type}"
     
+    nf_numero = dados.get("numero")
+    nf_serie = dados.get("serie")
+    nf_chave_acesso = dados.get("chaveAcesso") or dados.get("chave_acesso")
+    nf_data_emissao = dados.get("dataEmissao") or dados.get("data_emissao")
+    nf_valor_nota = dados.get("valorNota") or dados.get("valor_nota")
+
     job_payload = {
         "source": "B",
         "topic": "notas_fiscais",
         "venda_id": None,
         "codigo_situacao": None,
         "id_nota_fiscal": id_nota_fiscal_str,
-        "url_danfe": url_danfe
+        "url_danfe": url_danfe,
+        "nf_numero": str(nf_numero) if nf_numero is not None else None,
+        "nf_serie": str(nf_serie) if nf_serie is not None else None,
+        "nf_chave_acesso": nf_chave_acesso,
+        "nf_data_emissao": nf_data_emissao,
+        "nf_valor_nota": nf_valor_nota,
     }
     
     await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload)

@@ -130,20 +130,22 @@ app/
    - Saves venda_b_id to orders_map
 
 ### B/notas_fiscais (sync_nf_link)
-1. Webhook chega com `idNotaFiscalTiny` → cria job `sync_nf_link`
+1. Webhook chega com `idNotaFiscalTiny` + dados da NF (numero, serie, chaveAcesso, dataEmissao, valorNota) → cria job `sync_nf_link` com dados da NF no payload
 2. Worker processa `sync_nf_link`:
    - Verifica feature flag `sync_nf_link`
-   - Busca NF em B: `GET /notas-fiscais/{id}` (numero, serie, chaveAcesso, protocolo, dataAutorizacao, pedido)
-   - Extrai `pedido.id` da NF → busca `orders_map` por `venda_b_id`
-   - Se não existe mapping → done/skipped com reason `no_orders_map`
+   - Extrai dados da NF do payload do job (numero, serie, chaveAcesso)
+   - Fallback para jobs antigos: se `nf_chave_acesso` não está no payload, busca dados da NF na tabela `events` (evento original do webhook)
+   - Busca `venda_b_id` na tabela `events` (webhook B/vendas com mesmo `id_nota_fiscal`)
+   - Se não encontra evento de vendas → done/skipped com reason `no_vendas_event_for_nf`
+   - Busca `orders_map` por `venda_b_id` → se não existe → done/skipped com reason `no_orders_map`
    - Busca pedido em A: `GET /pedidos/{venda_a_id}` para observações atuais
    - Concatena bloco NF após 2 linhas em branco:
      ```
      NF {numero} - {serie} | CHAVE DE ACESSO
      {chave_acesso}
-     PROTOCOLO DE AUTORIZAÇÃO DE USO
-     {protocolo} - {data_autorizacao}
      ```
+   - Se protocolo disponível (via API fallback), adiciona bloco protocolo
+   - Dedup: se chave de acesso já está nas observações → skipped
    - Atualiza pedido em A: `PATCH /pedidos/{venda_a_id}` com novas observações
 
 ## Job Types

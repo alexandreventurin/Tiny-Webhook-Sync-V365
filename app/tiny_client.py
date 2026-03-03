@@ -144,7 +144,7 @@ class TinyClient:
     async def update_order(self, pedido_id: str, fields: dict) -> dict:
         url = f"{self._base_url}/pedidos/{pedido_id}"
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.patch(url, headers=self._headers(), json=fields)
+            response = await client.put(url, headers=self._headers(), json=fields)
             if response.status_code not in (200, 204):
                 raise TinyApiError(response.status_code, response.text, url)
             if response.status_code == 204:

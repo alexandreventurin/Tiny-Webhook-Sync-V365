@@ -196,7 +196,9 @@ Mapeamento completo de formas de envio de A para B com suporte a formas de frete
 - `observacoes`: Inclui dados de origem (forma de envio/frete original)
 - `pagamento`: Bloco fixo para todos os pedidos replicados
   - `formaPagamento.id`: 1 (Múltiplas)
-  - 1 parcela: dias=0, data=data da venda, obs="REJUDERME API", formaPagamento.id=9
+  - `formaRecebimento.id`: 1 (Múltiplas)
+  - `condicaoPagamento`: "0"
+  - 1 parcela: dias=0, data=data da venda (aaaa-mm-dd 00:00:00), obs="API REJUDERME", formaPagamento.id=9, formaRecebimento.id=9
 - **Marcador**: Após criar o pedido, adiciona marcador "API Rejuderme" via `POST /pedidos/{id}/marcadores` (falha no marcador não impede o job de concluir)
 
 ## Running

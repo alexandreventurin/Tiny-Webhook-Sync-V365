@@ -485,13 +485,19 @@ async def process_job(job: dict) -> None:
                 "valorFrete": float(str(order_data.get('valorFrete') or 0).replace(',', '.')),
                 "valorDesconto": 0,
                 "pagamento": {
-                    "formaPagamento": {"id": 1},
+                    "formaPagamento": {"id": 1, "nome": "Múltiplas"},
+                    "formaRecebimento": {"id": 1, "nome": "Múltiplas"},
+                    "meioPagamento": None,
+                    "condicaoPagamento": "0",
                     "parcelas": [
                         {
                             "dias": 0,
-                            "data": order_data.get('data'),
-                            "observacoes": "REJUDERME API",
-                            "formaPagamento": {"id": 9}
+                            "data": f"{order_data.get('data', '')} 00:00:00",
+                            "valor": None,
+                            "observacoes": "API REJUDERME",
+                            "formaPagamento": {"id": 9, "nome": ""},
+                            "formaRecebimento": {"id": 9, "nome": ""},
+                            "meioPagamento": None
                         }
                     ]
                 }

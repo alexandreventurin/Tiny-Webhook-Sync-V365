@@ -482,7 +482,7 @@ async def process_job(job: dict) -> None:
                     volumes=volumes_src
                 ),
                 "observacoes": f"Repasse Tiny - origem id {order_data.get('id')} nº {order_data.get('numeroPedido')} {obs_extra}",
-                "valorFrete": float(str(order_data.get('valorFrete') or 0).replace(',', '.')),
+                "valorFrete": 0,
                 "valorDesconto": 0,
                 "pagamento": {
                     "formaPagamento": {"id": 1, "nome": "Múltiplas"},

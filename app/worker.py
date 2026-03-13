@@ -485,18 +485,16 @@ async def process_job(job: dict) -> None:
                 "valorFrete": 0,
                 "valorDesconto": 0,
                 "pagamento": {
-                    "formaPagamento": {"id": 1, "nome": "Múltiplas"},
-                    "formaRecebimento": {"id": 1, "nome": "Múltiplas"},
+                    "formaPagamento": {"id": 974048216, "nome": "Conta Rejuderme"},
+                    "formaRecebimento": {"id": 974048216, "nome": "Conta Rejuderme"},
                     "meioPagamento": None,
                     "condicaoPagamento": "0",
                     "parcelas": [
                         {
                             "dias": 0,
-                            "data": f"{order_data.get('data', '')} 00:00:00",
-                            "valor": None,
                             "observacoes": "API REJUDERME",
-                            "formaPagamento": {"id": 9, "nome": ""},
-                            "formaRecebimento": {"id": 9, "nome": ""},
+                            "formaPagamento": {"id": 974048216, "nome": "Conta Rejuderme"},
+                            "formaRecebimento": {"id": 974048216, "nome": "Conta Rejuderme"},
                             "meioPagamento": None
                         }
                     ]

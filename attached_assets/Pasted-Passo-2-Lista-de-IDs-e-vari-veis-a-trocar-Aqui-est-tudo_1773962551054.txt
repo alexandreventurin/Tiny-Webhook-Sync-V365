@@ -1,0 +1,44 @@
+Passo 2: Lista de IDs e variáveis a trocar
+Aqui está tudo que precisa ser configurado para C (V365). Você vai precisar pedir ao João os IDs equivalentes no Tiny da V365:
+
+Variáveis de Ambiente (Secrets no Repl novo):
+
+Variável	Atual (B = Muy Bela)	Trocar para (C = V365)
+DATABASE_URL	Supabase atual	Nova connection string (novo projeto Supabase)
+TINY_A_CLIENT_ID	OAuth de A	Pode ser o mesmo (mesmo Tiny A)
+TINY_A_CLIENT_SECRET	OAuth de A	Pode ser o mesmo
+TINY_B_CLIENT_ID	OAuth de Muy Bela	OAuth de V365
+TINY_B_CLIENT_SECRET	OAuth de Muy Bela	OAuth de V365
+APP_BASE_URL	URL do Repl atual	URL do novo Repl
+IDs no worker.py a trocar:
+
+Constante	Atual (Muy Bela)	Trocar para (V365)
+DROPSHIPPING_DEPOSIT_ID	336403602	ID do depósito equivalente em A para V365
+DEST1_PRICE_LIST_ID	915701964	ID da lista de preço em V365
+vendedor.id	963241122	ID do vendedor em V365
+formaPagamento/formaRecebimento	974048216 ("Conta Rejuderme")	ID da forma de pagamento em V365
+DEST1_FE_FM_ID	895824123	ID forma envio FM em V365
+DEST1_FE_SEDEX_ID	846978945	ID forma envio Sedex em V365
+DEST1_FE_PAC_ID	971399662	ID forma envio PAC em V365
+DEST1_FF_FM_STANDARD_ID	971398494	ID forma frete FM Standard em V365
+DEST1_FF_SEDEX_ID	971399646	ID forma frete Sedex em V365
+DEST1_FF_PAC_ID	971399707	ID forma frete PAC em V365
+SKU_PRICE — provavelmente os mesmos preços, mas confirme com o João.
+
+products_map (tabela no Supabase) — mapeamento de produto A → C (IDs de produto diferentes dos de B).
+
+Passo 3: Criar banco Supabase para C
+Crie um novo projeto no Supabase
+As tabelas são criadas automaticamente pela aplicação ao iniciar (o código em db.py faz CREATE TABLE IF NOT EXISTS)
+Copie a connection string e coloque como DATABASE_URL no novo Repl
+Popule a tabela products_map com os mapeamentos A → C
+Popule a tabela feature_flags (pode copiar as mesmas flags)
+Passo 4: Configurar OAuth e Webhooks
+OAuth: No novo Repl, acesse /auth/a/start e /auth/b/start para conectar Tiny A e Tiny C
+Webhooks no Tiny A: Configurar novos webhooks apontando para o novo Repl:
+https://novo-repl.replit.app/webhooks/a/vendas
+(os mesmos endpoints, mas no domínio do novo Repl)
+Webhooks no Tiny C: Configurar:
+https://novo-repl.replit.app/webhooks/b/vendas
+https://novo-repl.replit.app/webhooks/b/notas_fiscais
+Observação importante: Os webhooks de A vão disparar para ambos os sistemas (B e C). O filtro de depósito (DROPSHIPPING_DEPOSIT_ID) vai garantir que cada sistema só processe os pedidos do depósito certo. Certifique-se de que A usa depósitos diferentes para B e C.

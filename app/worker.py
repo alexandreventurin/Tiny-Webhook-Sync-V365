@@ -41,7 +41,7 @@ from app.tiny_oauth import ensure_access_token, force_refresh_token
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-WORKER_BUILD = "2026-02-04-005"
+WORKER_BUILD = "2026-03-19-001"
 
 async def call_tiny(account: str, client: TinyClient, method: str, *args, **kwargs):
     """Call a TinyClient method with automatic 401 retry (force-refresh + retry once)."""
@@ -84,17 +84,17 @@ SKU_ALIAS = {
     "Rosto-5": "Rosto-5too",
 }
 
-DROPSHIPPING_DEPOSIT_ID = 336403602
+DROPSHIPPING_DEPOSIT_ID = 0  # TODO: ID do depósito de dropshipping em A para V365
 
-DEST1_FE_SEDEX_ID = 846978945
-DEST1_FE_FM_ID = 895824123
-DEST1_FE_PAC_ID = 971399662
+DEST1_FE_SEDEX_ID = 0         # TODO: ID forma envio Sedex em V365
+DEST1_FE_FM_ID = 0            # TODO: ID forma envio FM em V365
+DEST1_FE_PAC_ID = 0           # TODO: ID forma envio PAC em V365
 DEST1_FE_ME_ID = 0
-DEST1_PRICE_LIST_ID = 915701964
+DEST1_PRICE_LIST_ID = 0       # TODO: ID da lista de preço em V365
 
-DEST1_FF_FM_STANDARD_ID = 971398494
-DEST1_FF_SEDEX_ID = 971399646
-DEST1_FF_PAC_ID = 971399707
+DEST1_FF_FM_STANDARD_ID = 0   # TODO: ID forma frete FM Standard em V365
+DEST1_FF_SEDEX_ID = 0         # TODO: ID forma frete Sedex em V365
+DEST1_FF_PAC_ID = 0           # TODO: ID forma frete PAC em V365
 
 FORMA_ENVIO_MAP = {
     "FM Transportes": {
@@ -328,7 +328,7 @@ async def process_job(job: dict) -> None:
                     "deposito_id": deposito_id,
                     "deposito_nome": deposito_nome,
                     "expected_deposit_id": DROPSHIPPING_DEPOSIT_ID,
-                    "note": f"Depósito '{deposito_nome}' não é Dropshipping (Muy Bela)"
+                    "note": f"Depósito '{deposito_nome}' não é Dropshipping (V365)"
                 }
                 await update_job_done(job_id, action_preview)
                 logger.info(f"Job {job_id} skipped: deposit_not_allowed (deposito={deposito_nome}, id={deposito_id})")
@@ -473,7 +473,7 @@ async def process_job(job: dict) -> None:
                 "itens": itens_b,
                 "enderecoEntrega": endereco_entrega,
                 "listaPreco": {"id": DEST1_PRICE_LIST_ID},
-                "vendedor": {"id": 963241122},
+                "vendedor": {"id": 0},  # TODO: ID do vendedor em V365
                 "transportador": build_transportador_v3(
                     forma_envio_origem=forma_envio_src,
                     forma_frete_origem=forma_frete_src,
@@ -485,16 +485,16 @@ async def process_job(job: dict) -> None:
                 "valorFrete": 0,
                 "valorDesconto": 0,
                 "pagamento": {
-                    "formaPagamento": {"id": 974048216, "nome": "Conta Rejuderme"},
-                    "formaRecebimento": {"id": 974048216, "nome": "Conta Rejuderme"},
+                    "formaPagamento": {"id": 0, "nome": "Conta V365"},  # TODO: ID forma pagamento em V365
+                    "formaRecebimento": {"id": 0, "nome": "Conta V365"},  # TODO: ID forma recebimento em V365
                     "meioPagamento": None,
                     "condicaoPagamento": "0",
                     "parcelas": [
                         {
                             "dias": 0,
                             "observacoes": "API REJUDERME",
-                            "formaPagamento": {"id": 974048216, "nome": "Conta Rejuderme"},
-                            "formaRecebimento": {"id": 974048216, "nome": "Conta Rejuderme"},
+                            "formaPagamento": {"id": 0, "nome": "Conta V365"},  # TODO: ID forma pagamento em V365
+                            "formaRecebimento": {"id": 0, "nome": "Conta V365"},  # TODO: ID forma recebimento em V365
                             "meioPagamento": None
                         }
                     ]
@@ -673,8 +673,8 @@ async def process_job(job: dict) -> None:
                 mapping = await get_order_mapping_by_b(str(venda_id))
                 if not mapping:
                     # TODO: futuramente, chamar GET /pedidos/{venda_id} no Tiny B
-                    # para verificar se vendedor == Rejuderme (963241122).
-                    # Por ora, marca como not_mapped (pedido próprio da Muy Bela).
+                    # para verificar se vendedor == Rejuderme (ID do vendedor em V365).
+                    # Por ora, marca como not_mapped (pedido próprio da V365).
                     action_preview = {
                         "would": "sync_status",
                         "skipped": True,

@@ -3,7 +3,7 @@
 ## Overview
 FastAPI application to receive webhooks from Tiny ERP and store them in PostgreSQL (Supabase). Implements two-stage integration:
 1. Fetch order details from Tiny A (Rejuderme)
-2. Create order in Tiny B (Muy Bela) with situacao=8 (Dados Incompletos)
+2. Create order in Tiny C (V365) — internamente chamada de "B" no código — com situacao Em Aberto
 
 ## Project Structure
 ```
@@ -28,8 +28,8 @@ app/
 ### Tiny API Integration (OAuth V3)
 - `TINY_A_CLIENT_ID`: OAuth client ID for Tiny A
 - `TINY_A_CLIENT_SECRET`: OAuth client secret for Tiny A
-- `TINY_B_CLIENT_ID`: OAuth client ID for Tiny B
-- `TINY_B_CLIENT_SECRET`: OAuth client secret for Tiny B
+- `TINY_B_CLIENT_ID`: OAuth client ID for Tiny C (V365) — variável mantém nome "B" internamente
+- `TINY_B_CLIENT_SECRET`: OAuth client secret for Tiny C (V365)
 - `APP_BASE_URL`: Public URL for OAuth callbacks (e.g., https://your-app.replit.app)
 - `TINY_API_BASE`: API base URL (default: https://api.tiny.com.br/public-api/v3)
 - `TINY_AUTH_BASE`: Auth server URL (default: https://accounts.tiny.com.br)
@@ -123,7 +123,8 @@ app/
    - Creates chained `create_order_b` job
 3. Worker processes `create_order_b`:
    - **Gate Depósito**: Verifica `deposito.id` no fetched_payload
-     - Se `deposito.id != 336403602` (Dropshipping Muy Bela) → skipped com reason `deposit_not_allowed`
+     - Se `deposito.id != DROPSHIPPING_DEPOSIT_ID` (Dropshipping V365) → skipped com reason `deposit_not_allowed`
+     - **TODO**: preencher `DROPSHIPPING_DEPOSIT_ID` em worker.py com o ID do depósito de V365 em Tiny A
      - Se `fetched_payload` ausente → failed (não pode verificar depósito)
    - If EXECUTE_TINY_B=false: dry-run with action_preview
    - If EXECUTE_TINY_B=true: calls POST /pedidos (Em Aberto)
@@ -150,10 +151,10 @@ app/
 
 ## Job Types
 - `fetch_order_a` - Fetch order details from Tiny A
-- `create_order_b` - Create order in Tiny B (Em Aberto, somente depósito Dropshipping)
+- `create_order_b` - Create order in Tiny C / V365 (Em Aberto, somente depósito Dropshipping V365)
 - `sync_status` - Sync status changes (pronto_envio, entregue, cancelado, faturado, enviado)
-- `sync_nf_link` - Envia dados da NF de B para observações de A
-- `add_tag_b` - Adiciona marcador "API Rejuderme" ao pedido em B (retry com backoff: 1min, 3min, 5min)
+- `sync_nf_link` - Envia dados da NF de C (V365) para observações de A
+- `add_tag_b` - Adiciona marcador "API Rejuderme" ao pedido em C / V365 (retry com backoff: 1min, 3min, 5min)
 - `noop` - No operation
 
 ## Worker
@@ -174,17 +175,20 @@ Direct product ID mapping from Tiny A to Tiny B (hardcoded in worker.py):
 - SKU_ALIAS: Normalize SKU variations (e.g., "Rj Kit" → "RJ Kit")
 
 ### Transport Mapping (FORMA_ENVIO_MAP)
-Mapeamento completo de formas de envio de A para B com suporte a formas de frete:
+Mapeamento completo de formas de envio de A para C (V365) com suporte a formas de frete:
 
-| Forma Envio A | ID Destino B | Formas de Frete |
-|---------------|--------------|-----------------|
-| FM Transportes | 895824123 | Standard (default), EXPRESSO |
-| Correios (Sedex) | 846978945 | SEDEX CONTRATO AG (03220) (default), SEDEX 12, SEDEX 10, SEDEX HOJE |
-| Correios (PAC) | 971399662 | PAC CONTRATO AG (03298) (default), MINI ENVIOS |
+| Forma Envio A | ID Destino C (V365) | Formas de Frete |
+|---------------|---------------------|-----------------|
+| FM Transportes | TODO | Standard (default), EXPRESSO |
+| Correios (Sedex) | TODO | SEDEX CONTRATO AG (default), SEDEX 12, SEDEX 10, SEDEX HOJE |
+| Correios (PAC) | TODO | PAC CONTRATO AG (default), MINI ENVIOS |
 | Mercado Envios | (não configurado) | PAC, Sedex |
 
-### Order Payload Fields (create_order_b)
-- `listaPreco`: Links to price list in B (ID: 915701964)
+> **TODO**: Preencher os IDs de forma envio/frete (DEST1_FE_* e DEST1_FF_*) em worker.py com os IDs da V365 fornecidos pelo João.
+
+### Order Payload Fields (create_order_b → cria em Tiny C / V365)
+- `listaPreco`: Links to price list in C — TODO: preencher DEST1_PRICE_LIST_ID
+- `vendedor`: TODO: preencher ID do vendedor em V365
 - `transportador`: Maps shipping method via `build_transportador_v3()`
   - `formaEnvio.id`: ID da forma de envio mapeada
   - `formaEnvio.formaFrete`: Tipo de frete (Standard, SEDEX CONTRATO AG, etc)
@@ -194,11 +198,11 @@ Mapeamento completo de formas de envio de A para B com suporte a formas de frete
 - `numeroOrdemCompra`: Source order number
 - `ecommerce.numeroPedidoEcommerce`: E-commerce reference
 - `observacoes`: Inclui dados de origem (forma de envio/frete original)
-- `pagamento`: Bloco fixo para todos os pedidos replicados
-  - `formaPagamento.id`: 974048216 (Conta Rejuderme)
-  - `formaRecebimento.id`: 974048216 (Conta Rejuderme)
+- `pagamento`: Bloco fixo para todos os pedidos replicados — TODO: preencher IDs de forma de pagamento/recebimento da V365
+  - `formaPagamento.id`: TODO — ID forma pagamento em V365 ("Conta V365")
+  - `formaRecebimento.id`: TODO — ID forma recebimento em V365
   - `condicaoPagamento`: "0"
-  - 1 parcela: dias=0, obs="API REJUDERME", formaPagamento.id=974048216, formaRecebimento.id=974048216 (data e valor preenchidos automaticamente pelo Tiny)
+  - 1 parcela: dias=0, obs="API REJUDERME", formaPagamento/formaRecebimento com IDs V365
 - **Marcador**: Após criar o pedido, adiciona marcador "API Rejuderme" via `POST /pedidos/{id}/marcadores` (falha no marcador não impede o job de concluir)
 
 ## Running

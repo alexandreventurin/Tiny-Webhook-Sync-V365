@@ -316,7 +316,7 @@ async function loadAuth() {
     const bar = document.getElementById('authBar');
     const accounts = {A: null, B: null};
     (data.tokens || []).forEach(t => { accounts[t.account] = t; });
-    const labels = {A: 'Tiny A (Rejuderme)', B: 'Tiny B (Muy Bela)'};
+    const labels = {A: 'Tiny A (Rejuderme)', B: 'Tiny C (V365)'};
     const authPaths = {A: '/auth/a/start', B: '/auth/b/start'};
     bar.innerHTML = ['A','B'].map(acc => {
       const t = accounts[acc];

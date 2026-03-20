@@ -156,14 +156,13 @@ async function loadRuns() {
       document.getElementById('runsPagination').innerHTML = '';
       return;
     }
-    let html = '<table><thead><tr><th>#</th><th>Status</th><th>Período</th><th>Páginas</th><th>Encontrados</th><th>Jobs</th><th>Já Imp.</th><th>Ignorados</th><th>Iniciado</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>#</th><th>Status</th><th>Período</th><th>Encontrados</th><th>Jobs</th><th>Já Replic.</th><th>Ignorados</th><th>Iniciado</th></tr></thead><tbody>';
     for (const r of runs) {
       const statusClass = `status-${r.status}`;
       html += `<tr class="run-row" onclick="showDetail(${r.id})">
         <td>${r.id}</td>
         <td><span class="status-badge ${statusClass}">${r.status}</span></td>
         <td>${r.data_inicio} a ${r.data_fim}</td>
-        <td>${r.pages_fetched || 0}</td>
         <td>${r.orders_found || 0}</td>
         <td>${r.jobs_created || 0}</td>
         <td>${r.orders_skipped || 0}</td>
@@ -250,10 +249,10 @@ async function refreshDetail() {
     const pct = r.orders_found > 0 ? Math.round((total / r.orders_found) * 100) : 0;
     document.getElementById('detailStats').innerHTML = `
       <div class="stats-grid">
-        <div class="stat-box"><div class="val">${r.pages_fetched || 0}</div><div class="lbl">Páginas</div></div>
         <div class="stat-box"><div class="val">${r.orders_found || 0}</div><div class="lbl">Encontrados</div></div>
         <div class="stat-box"><div class="val" style="color:#4ade80">${r.jobs_created || 0}</div><div class="lbl">Jobs Criados</div></div>
-        <div class="stat-box"><div class="val" style="color:#94a3b8">${r.orders_skipped || 0}</div><div class="lbl">Já Importados</div></div>
+        <div class="stat-box"><div class="val" style="color:#38bdf8">${r.created_in_c || 0}</div><div class="lbl">Criados em C</div></div>
+        <div class="stat-box"><div class="val" style="color:#94a3b8">${r.orders_skipped || 0}</div><div class="lbl">Já Replicados</div></div>
         <div class="stat-box"><div class="val" style="color:#fb923c">${r.orders_ignored || 0}</div><div class="lbl">Ignorados</div></div>
       </div>
       ${isRunning ? `<div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>` : ''}
@@ -263,7 +262,7 @@ async function refreshDetail() {
     let tbody = '';
     for (const it of items) {
       const actionClass = it.action === 'job_created' ? 'action-created' : it.action === 'already_imported' ? 'action-skipped' : 'action-ignored';
-      const actionLabel = it.action === 'job_created' ? 'Job Criado' : it.action === 'already_imported' ? 'Já Importado' : 'Ignorado';
+      const actionLabel = it.action === 'job_created' ? 'Job Criado' : it.action === 'already_imported' ? 'Já Replicado' : 'Ignorado';
       tbody += `<tr>
         <td>${it.venda_a_id}</td>
         <td>${it.numero_pedido || '-'}</td>

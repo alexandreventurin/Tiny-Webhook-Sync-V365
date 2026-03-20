@@ -849,13 +849,14 @@ async def admin_import_start(
 
 @app.get("/admin/import/{run_id}")
 async def admin_import_detail(run_id: int, items_limit: int = 200, items_offset: int = 0):
-    from app.db import get_import_run, get_import_run_items
+    from app.db import get_import_run, get_import_run_items, count_import_run_created_in_c
 
     run = await get_import_run(run_id)
     if not run:
         return JSONResponse(status_code=404, content={"error": "not_found"})
 
     items = await get_import_run_items(run_id, limit=items_limit, offset=items_offset)
+    run["created_in_c"] = await count_import_run_created_in_c(run_id)
     for key in ['started_at', 'finished_at', 'created_at']:
         if run.get(key):
             run[key] = str(run[key])

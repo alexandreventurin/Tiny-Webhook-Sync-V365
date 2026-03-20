@@ -975,6 +975,19 @@ async def get_import_run(run_id: int) -> dict | None:
         return dict(row) if row else None
 
 
+async def count_import_run_created_in_c(run_id: int) -> int:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        count = await conn.fetchval("""
+            SELECT COUNT(*) FROM public.import_run_items iri
+            JOIN public.orders_map om ON om.venda_a_id = CAST(iri.venda_a_id AS INTEGER)
+            WHERE iri.run_id = $1
+              AND iri.action = 'job_created'
+              AND om.venda_c_id IS NOT NULL
+        """, run_id)
+        return count or 0
+
+
 async def get_import_run_items(run_id: int, limit: int = 200, offset: int = 0) -> list:
     p = await get_pool()
     async with p.acquire() as conn:

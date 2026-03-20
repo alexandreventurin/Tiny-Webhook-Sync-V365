@@ -43,4 +43,4 @@ run = ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 5000"]
 [userenv.shared]
 MAX_ORDERS_TO_REPLICATE = "99999999999"
 JOB_DELAY_MINUTES = "5"
-EXECUTE_TINY_C = "false"
+EXECUTE_TINY_C = "true"

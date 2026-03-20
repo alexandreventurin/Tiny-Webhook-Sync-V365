@@ -596,7 +596,7 @@ async def upsert_orders_map_with_c(external_key: str, venda_a_id: str, venda_c_i
             ON CONFLICT (external_key) DO UPDATE SET 
                 venda_c_id = EXCLUDED.venda_c_id,
                 updated_at = NOW()
-        """, external_key, venda_a_id, venda_c_id)
+        """, external_key, int(venda_a_id), int(venda_c_id) if venda_c_id else None)
 
 
 async def get_orders_map_list(limit: int) -> list[dict]:

@@ -473,7 +473,6 @@ async def process_job(job: dict) -> None:
                 "numeroOrdemCompra": str(order_data.get('numeroPedido') or ""),
                 "itens": itens_c,
                 "enderecoEntrega": endereco_entrega,
-                "deposito": {"id": DROPSHIPPING_DEPOSIT_ID_C},
                 "listaPreco": {"id": DEST1_PRICE_LIST_ID},
                 "vendedor": {"id": 906538550},  # Rejuderme em V365
                 "transportador": build_transportador_v3(

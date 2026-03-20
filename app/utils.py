@@ -54,19 +54,23 @@ def generate_dedupe_key(
 def normalize_status(codigo_situacao) -> str | None:
     if codigo_situacao is None:
         return None
+    num_map = {
+        1: "aberto",
+        2: "em_aberto",
+        3: "aprovado",
+        4: "faturado",
+        5: "enviado",
+        6: "pronto_envio",
+        7: "entregue",
+        9: "cancelado"
+    }
     if isinstance(codigo_situacao, int):
-        status_map = {
-            1: "aberto",
-            2: "em_aberto",
-            3: "aprovado",
-            4: "faturado",
-            5: "enviado",
-            6: "pronto_envio",
-            7: "entregue",
-            9: "cancelado"
-        }
-        return status_map.get(codigo_situacao)
+        return num_map.get(codigo_situacao)
     s = str(codigo_situacao).strip().lower().replace(" ", "_")
+    try:
+        return num_map.get(int(s))
+    except (ValueError, TypeError):
+        pass
     return s if s else None
 
 

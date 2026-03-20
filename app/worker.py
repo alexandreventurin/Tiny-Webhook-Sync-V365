@@ -16,22 +16,22 @@ from app.db import (
     upsert_orders_a_snapshot,
     upsert_orders_a_fetched,
     upsert_orders_a_fetch_error,
-    upsert_orders_map_with_b,
+    upsert_orders_map_with_c,
     get_order_a_snapshot,
     get_snapshot_fetched_at,
     get_order_mapping_by_a,
-    get_order_mapping_by_b,
-    get_venda_b_by_nota_fiscal,
+    get_order_mapping_by_c,
+    get_venda_c_by_nota_fiscal,
     insert_job,
     reset_stale_locks,
-    count_orders_replicated_to_b,
+    count_orders_replicated_to_c,
     load_products_map,
     get_feature_flag,
     update_orders_map_sync
 )
 from app.settings import (
-    TINY_A_TOKEN, TINY_B_TOKEN, 
-    ENABLE_FETCH_A, EXECUTE_TINY_B, 
+    TINY_A_TOKEN, TINY_C_TOKEN, 
+    ENABLE_FETCH_A, EXECUTE_TINY_C, 
     ALLOW_VENDA_IDS, FETCH_CACHE_MINUTES,
     MAX_ORDERS_TO_REPLICATE
 )
@@ -276,7 +276,7 @@ async def process_job(job: dict) -> None:
     topic = payload.get('topic')
     
     try:
-        if job_type == 'create_order_b':
+        if job_type == 'create_order_c':
             if not await get_feature_flag("replicate_orders"):
                 action_preview = {"would": "create_order_in_B", "skipped": True, "reason": "replicate_orders flag disabled"}
                 await update_job_done(job_id, action_preview)
@@ -348,7 +348,7 @@ async def process_job(job: dict) -> None:
             if not itens_a:
                 missing_fields.append('itens')
             
-            if not EXECUTE_TINY_B:
+            if not EXECUTE_TINY_C:
                 await upsert_orders_map(external_key=external_key, venda_a_id=str(venda_id))
                 action_preview = {
                     "would": "create_order_in_B",
@@ -361,10 +361,10 @@ async def process_job(job: dict) -> None:
                     "cpf_cnpj": cpf_cnpj,
                     "itens_count": len(itens_a),
                     "missing_fields": missing_fields if missing_fields else None,
-                    "note": "EXECUTE_TINY_B=false"
+                    "note": "EXECUTE_TINY_C=false"
                 }
                 await update_job_done(job_id, action_preview)
-                logger.info(f"Job {job_id} completed: create_order_b dry-run for {external_key}")
+                logger.info(f"Job {job_id} completed: create_order_c dry-run for {external_key}")
                 return
             
             if missing_fields:
@@ -372,25 +372,25 @@ async def process_job(job: dict) -> None:
                 logger.warning(f"Job {job_id} failed: missing required fields {missing_fields}")
                 return
             
-            token_b = await ensure_access_token("B")
-            if not token_b:
+            token_c = await ensure_access_token("B")
+            if not token_c:
                 await update_job_failed(job_id, "No valid OAuth token for account B", attempts)
                 logger.warning(f"Job {job_id} failed: No OAuth token for B")
                 return
             
-            client_b = TinyClient(token_b)
+            client_c = TinyClient(token_c)
             
-            id_contato_b = None
+            id_contato_c = None
             contact_created = False
             try:
-                contacts = await call_tiny("B", client_b, "search_contacts", cpf_cnpj)
+                contacts = await call_tiny("B", client_c, "search_contacts", cpf_cnpj)
                 if contacts:
-                    id_contato_b = contacts[0].get('id')
-                    logger.info(f"Found existing contact in B: {id_contato_b}")
+                    id_contato_c = contacts[0].get('id')
+                    logger.info(f"Found existing contact in B: {id_contato_c}")
             except TinyApiError as e:
                 logger.warning(f"Error searching contacts: {e}")
             
-            if not id_contato_b:
+            if not id_contato_c:
                 contact_payload = {
                     "nome": cliente.get('nome'),
                     "cpfCnpj": cpf_cnpj,
@@ -413,18 +413,18 @@ async def process_job(job: dict) -> None:
                     contact_payload['endereco'] = {k: v for k, v in contact_payload['endereco'].items() if v is not None}
                 
                 try:
-                    contact_result = await call_tiny("B", client_b, "create_contact", contact_payload)
-                    id_contato_b = contact_result.get('id')
+                    contact_result = await call_tiny("B", client_c, "create_contact", contact_payload)
+                    id_contato_c = contact_result.get('id')
                     contact_created = True
-                    logger.info(f"Created contact in B: {id_contato_b}")
+                    logger.info(f"Created contact in B: {id_contato_c}")
                 except TinyApiError as e:
                     await update_job_failed(job_id, f"Failed to create contact: {e.status_code} {e.body}", attempts)
                     logger.error(f"Job {job_id} failed to create contact: {e}")
                     return
             
-            itens_b = await build_itens_dest_v3(itens_a)
+            itens_c = await build_itens_dest_v3(itens_a)
             
-            if not itens_b:
+            if not itens_c:
                 await update_job_failed(job_id, "No products mapped from A to B (check products_map table)", attempts)
                 logger.warning(f"Job {job_id} failed: no products mapped")
                 return
@@ -466,11 +466,11 @@ async def process_job(job: dict) -> None:
                 obs_extra += f" | Frete: {forma_frete_src}"
             obs_extra += "]"
             
-            order_payload_b = {
+            order_payload_c = {
                 "data": order_data.get('data'),
-                "idContato": id_contato_b,
+                "idContato": id_contato_c,
                 "numeroOrdemCompra": str(order_data.get('numeroPedido') or ""),
-                "itens": itens_b,
+                "itens": itens_c,
                 "enderecoEntrega": endereco_entrega,
                 "listaPreco": {"id": DEST1_PRICE_LIST_ID},
                 "vendedor": {"id": 906538550},  # Rejuderme em V365
@@ -501,37 +501,37 @@ async def process_job(job: dict) -> None:
                 }
             }
             if numero_pedido_ecommerce:
-                order_payload_b["ecommerce"] = {"id": 0, "numeroPedidoEcommerce": numero_pedido_ecommerce}
-            order_payload_b = {k: v for k, v in order_payload_b.items() if v is not None}
+                order_payload_c["ecommerce"] = {"id": 0, "numeroPedidoEcommerce": numero_pedido_ecommerce}
+            order_payload_c = {k: v for k, v in order_payload_c.items() if v is not None}
             
-            logger.info(f"create_order_b payload for venda {venda_id}: {json.dumps(order_payload_b, default=str)}")
-            result = await call_tiny("B", client_b, "create_order", order_payload_b)
-            venda_b_id = str(result.get('id') or result.get('numeroPedido') or '')
+            logger.info(f"create_order_c payload for venda {venda_id}: {json.dumps(order_payload_c, default=str)}")
+            result = await call_tiny("B", client_c, "create_order", order_payload_c)
+            venda_c_id = str(result.get('id') or result.get('numeroPedido') or '')
             
-            await upsert_orders_map_with_b(external_key=external_key, venda_a_id=str(venda_id), venda_b_id=venda_b_id)
+            await upsert_orders_map_with_c(external_key=external_key, venda_a_id=str(venda_id), venda_c_id=venda_c_id)
             
             tag_added = False
             tag_job_created = False
             try:
-                tag_added = await call_tiny("B", client_b, "add_order_tags", venda_b_id, ["API Rejuderme"])
+                tag_added = await call_tiny("B", client_c, "add_order_tags", venda_c_id, ["API Rejuderme"])
             except Exception as e:
-                logger.warning(f"Job {job_id}: failed to add tag to order {venda_b_id}: {e}")
+                logger.warning(f"Job {job_id}: failed to add tag to order {venda_c_id}: {e}")
             if not tag_added:
-                tag_dedupe = f"B:tag:{venda_b_id}:add_tag_b"
-                tag_payload = {"venda_b_id": venda_b_id, "tag": "API Rejuderme"}
-                tag_job_created = await insert_job(job_type="add_tag_b", dedupe_key=tag_dedupe, event_id=None, payload=tag_payload, delay_minutes=1)
+                tag_dedupe = f"C:tag:{venda_c_id}:add_tag_c"
+                tag_payload = {"venda_c_id": venda_c_id, "tag": "API Rejuderme"}
+                tag_job_created = await insert_job(job_type="add_tag_c", dedupe_key=tag_dedupe, event_id=None, payload=tag_payload, delay_minutes=1)
                 if tag_job_created:
-                    logger.info(f"Job {job_id}: tag failed, created add_tag_b job for order {venda_b_id}")
+                    logger.info(f"Job {job_id}: tag failed, created add_tag_c job for order {venda_c_id}")
             
             action_preview = {
                 "would": "create_order_in_B",
                 "situacao_target": "em_aberto",
                 "venda_a_id": venda_id,
-                "venda_b_id": venda_b_id,
+                "venda_c_id": venda_c_id,
                 "external_key": external_key,
-                "id_contato_b": id_contato_b,
+                "id_contato_c": id_contato_c,
                 "contact_created": contact_created,
-                "itens_mapped": len(itens_b),
+                "itens_mapped": len(itens_c),
                 "forma_envio_origem": forma_envio_src,
                 "forma_frete_origem": forma_frete_src,
                 "volumes": volumes_src,
@@ -540,7 +540,7 @@ async def process_job(job: dict) -> None:
                 "tag_job_created": tag_job_created if not tag_added else None
             }
             await update_job_done(job_id, action_preview)
-            logger.info(f"Job {job_id} completed: created order in B with id {venda_b_id} (envio={forma_envio_src}, frete={forma_frete_src}, tag={tag_added})")
+            logger.info(f"Job {job_id} completed: created order in C with id {venda_c_id} (envio={forma_envio_src}, frete={forma_frete_src}, tag={tag_added})")
         
         elif job_type == 'fetch_order_a':
             if not venda_id:
@@ -585,13 +585,13 @@ async def process_job(job: dict) -> None:
                     }
                     await update_job_done(job_id, action_preview)
                     logger.info(f"Job {job_id} skipped: cached fetch")
-                    create_order_dedupe_key = f"A:vendas:{venda_id}:create_order_b"
+                    create_order_dedupe_key = f"A:vendas:{venda_id}:create_order_c"
                     create_order_payload = {
                         "source": "A", "topic": "vendas", "venda_id": str(venda_id),
                         "codigo_situacao": codigo_situacao, "id_nota_fiscal": id_nota_fiscal,
                         "from_fetch_order_a": True
                     }
-                    await insert_job(job_type="create_order_b", dedupe_key=create_order_dedupe_key, event_id=None, payload=create_order_payload)
+                    await insert_job(job_type="create_order_c", dedupe_key=create_order_dedupe_key, event_id=None, payload=create_order_payload)
                     return
             
             token_a = await ensure_access_token("A")
@@ -618,7 +618,7 @@ async def process_job(job: dict) -> None:
             await update_job_done(job_id, action_preview)
             logger.info(f"Job {job_id} completed: fetch_order_a for venda {venda_id}")
             
-            create_order_dedupe_key = f"A:vendas:{venda_id}:create_order_b"
+            create_order_dedupe_key = f"A:vendas:{venda_id}:create_order_c"
             create_order_payload = {
                 "source": "A",
                 "topic": "vendas",
@@ -627,8 +627,8 @@ async def process_job(job: dict) -> None:
                 "id_nota_fiscal": id_nota_fiscal,
                 "from_fetch_order_a": True
             }
-            await insert_job(job_type="create_order_b", dedupe_key=create_order_dedupe_key, event_id=None, payload=create_order_payload)
-            logger.info(f"Chained create_order_b job for venda {venda_id}")
+            await insert_job(job_type="create_order_c", dedupe_key=create_order_dedupe_key, event_id=None, payload=create_order_payload)
+            logger.info(f"Chained create_order_c job for venda {venda_id}")
         
         elif job_type == 'sync_status':
             flag_key = f"sync_status_{codigo_situacao}" if codigo_situacao else None
@@ -666,11 +666,11 @@ async def process_job(job: dict) -> None:
                     await update_job_skipped_not_mapped(job_id, action_preview)
                     logger.info(f"Job {job_id} skipped_not_mapped: venda_a_id={venda_id}")
                     return
-                target_id = str(mapping["venda_b_id"])
+                target_id = str(mapping["venda_c_id"])
                 target_source = "B"
                 target_token = await ensure_access_token("B")
             elif source == "B":
-                mapping = await get_order_mapping_by_b(str(venda_id))
+                mapping = await get_order_mapping_by_c(str(venda_id))
                 if not mapping:
                     # TODO: futuramente, chamar GET /pedidos/{venda_id} no Tiny B
                     # para verificar se vendedor == Rejuderme (ID do vendedor em V365).
@@ -679,10 +679,10 @@ async def process_job(job: dict) -> None:
                         "would": "sync_status",
                         "skipped": True,
                         "reason": "not_mapped",
-                        "note": f"venda_b_id={venda_id} não existe na orders_map (pedido não replicado)",
+                        "note": f"venda_c_id={venda_id} não existe na orders_map (pedido não replicado)",
                     }
                     await update_job_skipped_not_mapped(job_id, action_preview)
-                    logger.info(f"Job {job_id} skipped_not_mapped: venda_b_id={venda_id}")
+                    logger.info(f"Job {job_id} skipped_not_mapped: venda_c_id={venda_id}")
                     return
                 target_id = str(mapping["venda_a_id"])
                 target_source = "A"
@@ -754,24 +754,24 @@ async def process_job(job: dict) -> None:
                     await update_job_failed(job_id, f"No NF data in payload or events for id_nota_fiscal={id_nota_fiscal}", attempts)
                     return
 
-            venda_b_id_nf = await get_venda_b_by_nota_fiscal(id_nota_fiscal)
+            venda_c_id_nf = await get_venda_c_by_nota_fiscal(id_nota_fiscal)
 
-            if not venda_b_id_nf:
+            if not venda_c_id_nf:
                 action_preview = {"would": "sync_nf_link", "skipped": True, "reason": "no_vendas_event_for_nf", "id_nota_fiscal": id_nota_fiscal}
                 await update_job_done(job_id, action_preview)
                 logger.info(f"Job {job_id}: no B/vendas event with id_nota_fiscal={id_nota_fiscal}, skipping")
                 return
 
-            mapping = await get_order_mapping_by_b(venda_b_id_nf)
+            mapping = await get_order_mapping_by_c(venda_c_id_nf)
             if not mapping:
-                action_preview = {"would": "sync_nf_link", "skipped": True, "reason": "no_orders_map", "venda_b_id": venda_b_id_nf, "id_nota_fiscal": id_nota_fiscal}
+                action_preview = {"would": "sync_nf_link", "skipped": True, "reason": "no_orders_map", "venda_c_id": venda_c_id_nf, "id_nota_fiscal": id_nota_fiscal}
                 await update_job_done(job_id, action_preview)
-                logger.info(f"Job {job_id}: no orders_map for venda_b {venda_b_id_nf}, skipping")
+                logger.info(f"Job {job_id}: no orders_map for venda_b {venda_c_id_nf}, skipping")
                 return
 
             venda_a_id = mapping.get("venda_a_id")
             if not venda_a_id:
-                await update_job_failed(job_id, f"orders_map for B:{venda_b_id_nf} has no venda_a_id", attempts)
+                await update_job_failed(job_id, f"orders_map for B:{venda_c_id_nf} has no venda_a_id", attempts)
                 return
 
             token_a = await ensure_access_token("A")
@@ -809,7 +809,7 @@ async def process_job(job: dict) -> None:
                 "would": "sync_nf_link",
                 "done": True,
                 "id_nota_fiscal": id_nota_fiscal,
-                "venda_b_id": venda_b_id_nf,
+                "venda_c_id": venda_c_id_nf,
                 "venda_a_id": venda_a_id,
                 "nf_numero": nf_numero,
                 "nf_serie": nf_serie,
@@ -817,49 +817,49 @@ async def process_job(job: dict) -> None:
                 "nf_source": nf_source,
             }
             await update_job_done(job_id, action_preview)
-            logger.info(f"Job {job_id} completed: sync_nf_link NF {nf_numero} for A:{venda_a_id} (from B:{venda_b_id_nf}, source={nf_source})")
+            logger.info(f"Job {job_id} completed: sync_nf_link NF {nf_numero} for A:{venda_a_id} (from B:{venda_c_id_nf}, source={nf_source})")
         
-        elif job_type == 'add_tag_b':
+        elif job_type == 'add_tag_c':
             TAG_BACKOFF_MINUTES = [1, 3, 5]
             TAG_MAX_RETRIES = len(TAG_BACKOFF_MINUTES)
 
-            tag_venda_b_id = payload.get('venda_b_id')
+            tag_venda_c_id = payload.get('venda_c_id')
             tag_text = payload.get('tag', 'API Rejuderme')
 
-            if not tag_venda_b_id:
-                await update_job_failed(job_id, "missing venda_b_id", attempts)
+            if not tag_venda_c_id:
+                await update_job_failed(job_id, "missing venda_c_id", attempts)
                 return
 
-            token_b = await ensure_access_token("B")
-            if not token_b:
+            token_c = await ensure_access_token("B")
+            if not token_c:
                 if attempts <= TAG_MAX_RETRIES:
                     delay = TAG_BACKOFF_MINUTES[attempts - 1]
                     await reschedule_job_with_backoff(job_id, attempts, delay, "No valid OAuth token for B")
-                    logger.info(f"Job {job_id} add_tag_b rescheduled (attempt {attempts}, retry in {delay}min)")
+                    logger.info(f"Job {job_id} add_tag_c rescheduled (attempt {attempts}, retry in {delay}min)")
                 else:
                     await update_job_failed(job_id, "No valid OAuth token for B after retries", attempts)
                 return
 
-            client_b = TinyClient(token_b)
+            client_c = TinyClient(token_c)
             tag_ok = False
             tag_error = ""
             try:
-                tag_ok = await call_tiny("B", client_b, "add_order_tags", tag_venda_b_id, [tag_text])
+                tag_ok = await call_tiny("B", client_c, "add_order_tags", tag_venda_c_id, [tag_text])
             except Exception as e:
                 tag_error = str(e)
-                logger.warning(f"Job {job_id} add_tag_b failed: {e}")
+                logger.warning(f"Job {job_id} add_tag_c failed: {e}")
 
             if tag_ok:
-                action_preview = {"would": "add_tag_b", "venda_b_id": tag_venda_b_id, "tag": tag_text, "tag_added": True, "attempts": attempts}
+                action_preview = {"would": "add_tag_c", "venda_c_id": tag_venda_c_id, "tag": tag_text, "tag_added": True, "attempts": attempts}
                 await update_job_done(job_id, action_preview)
-                logger.info(f"Job {job_id} completed: add_tag_b for order {tag_venda_b_id} (attempt {attempts})")
+                logger.info(f"Job {job_id} completed: add_tag_c for order {tag_venda_c_id} (attempt {attempts})")
             elif attempts <= TAG_MAX_RETRIES:
                 delay = TAG_BACKOFF_MINUTES[attempts - 1]
                 await reschedule_job_with_backoff(job_id, attempts, delay, tag_error or "tag request failed")
-                logger.info(f"Job {job_id} add_tag_b rescheduled (attempt {attempts}/{TAG_MAX_RETRIES}, retry in {delay}min)")
+                logger.info(f"Job {job_id} add_tag_c rescheduled (attempt {attempts}/{TAG_MAX_RETRIES}, retry in {delay}min)")
             else:
                 await update_job_failed(job_id, f"add_tag_b failed after {attempts} attempts: {tag_error}", attempts)
-                logger.warning(f"Job {job_id} add_tag_b gave up after {attempts} attempts for order {tag_venda_b_id}")
+                logger.warning(f"Job {job_id} add_tag_c gave up after {attempts} attempts for order {tag_venda_c_id}")
 
         elif job_type == 'noop':
             action_preview = {

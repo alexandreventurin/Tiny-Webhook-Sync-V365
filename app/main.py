@@ -18,7 +18,7 @@ from app.db import (
     get_jobs_list, get_last_event_at, get_last_job_done_at,
     get_orders_a_list, get_order_a_snapshot, get_orders_map_list,
     check_is_echo, update_event_action_result,
-    get_order_mapping_by_a, get_order_mapping_by_b
+    get_order_mapping_by_a, get_order_mapping_by_c
 )
 from app.schemas import (
     WebhookResponse, HealthResponse, JobsListResponse, JobItem, RunJobsResponse,
@@ -112,7 +112,7 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
         if source == "A":
             mapping = await get_order_mapping_by_a(venda_str)
         else:
-            mapping = await get_order_mapping_by_b(venda_str)
+            mapping = await get_order_mapping_by_c(venda_str)
         if not mapping:
             noop_payload = {
                 "source": source, "topic": topic,
@@ -199,7 +199,7 @@ async def webhook_c_notas_fiscais(request: Request):
         return JSONResponse(content={"ok": True, "status": "ignored", "reason": "missing_id_nota_fiscal"})
     
     job_type = "sync_nf_link"
-    dedupe_key = f"B:notas_fiscais:{id_nota_fiscal_str}:{job_type}"
+    dedupe_key = f"C:notas_fiscais:{id_nota_fiscal_str}:{job_type}"
     
     nf_numero = dados.get("numero")
     nf_serie = dados.get("serie")
@@ -298,10 +298,10 @@ async def admin_failed_jobs_count():
 
 @app.get("/admin/replication-status")
 async def admin_replication_status():
-    from app.db import count_orders_replicated_to_b
-    from app.settings import MAX_ORDERS_TO_REPLICATE, EXECUTE_TINY_B
+    from app.db import count_orders_replicated_to_c
+    from app.settings import MAX_ORDERS_TO_REPLICATE, EXECUTE_TINY_C
     
-    current_count = await count_orders_replicated_to_b()
+    current_count = await count_orders_replicated_to_c()
     limit = MAX_ORDERS_TO_REPLICATE
     
     return {
@@ -310,7 +310,7 @@ async def admin_replication_status():
         "limit": limit,
         "remaining": max(0, limit - current_count) if limit > 0 else "unlimited",
         "limit_reached": current_count >= limit if limit > 0 else False,
-        "execute_tiny_b": EXECUTE_TINY_B
+        "execute_tiny_c": EXECUTE_TINY_C
     }
 
 

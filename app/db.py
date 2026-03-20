@@ -62,7 +62,7 @@ async def init_db():
                     id SERIAL PRIMARY KEY,
                     external_key TEXT UNIQUE NOT NULL,
                     venda_a_id INTEGER,
-                    venda_b_id INTEGER,
+                    venda_c_id INTEGER,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     updated_at TIMESTAMPTZ DEFAULT NOW()
                 )
@@ -166,24 +166,46 @@ async def init_db():
                     updated_at TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS public.products_map (
+                    id_a INTEGER PRIMARY KEY,
+                    id_b INTEGER,
+                    sku TEXT,
+                    descricao TEXT,
+                    situacao TEXT,
+                    ativo BOOLEAN DEFAULT true,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS public.tiny_tokens (
+                    account TEXT PRIMARY KEY,
+                    access_token TEXT,
+                    refresh_token TEXT,
+                    expires_at TIMESTAMPTZ,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
             
             try:
                 await conn.execute("ALTER TABLE public.jobs DROP CONSTRAINT IF EXISTS jobs_job_type_check")
                 await conn.execute("""
                     ALTER TABLE public.jobs ADD CONSTRAINT jobs_job_type_check
-                    CHECK (job_type = ANY (ARRAY['noop','create_order_b','sync_status','fetch_label','fetch_nf_link','sync_nf_link','fetch_order_a','add_tag_b']))
+                    CHECK (job_type = ANY (ARRAY['noop','create_order_c','sync_status','fetch_label','fetch_nf_link','sync_nf_link','fetch_order_a','add_tag_c']))
                 """)
             except Exception:
                 pass
 
             await conn.execute("""
                 INSERT INTO public.feature_flags (key, enabled, functional, label, description) VALUES
-                    ('replicate_orders', false, true, 'Replicar Pedidos', 'Cria pedidos em B quando A é aprovado'),
-                    ('sync_status_enviado', false, true, 'Sync Status: Enviado', 'Espelha status enviado de A para B'),
-                    ('sync_status_entregue', false, true, 'Sync Status: Entregue', 'Espelha status entregue de A para B'),
-                    ('sync_status_cancelado', false, true, 'Sync Status: Cancelado', 'Espelha status cancelado entre A e B'),
-                    ('sync_status_faturado', false, true, 'Sync Status: Faturado', 'Espelha status faturado de B para A'),
-                    ('sync_nf_link', false, true, 'Enviar NF', 'Envia dados da NF de B para observações de A')
+                    ('replicate_orders', false, true, 'Replicar Pedidos', 'Cria pedidos em C quando A é aprovado'),
+                    ('sync_status_enviado', false, true, 'Sync Status: Enviado', 'Espelha status enviado de A para C'),
+                    ('sync_status_entregue', false, true, 'Sync Status: Entregue', 'Espelha status entregue de A para C'),
+                    ('sync_status_cancelado', false, true, 'Sync Status: Cancelado', 'Espelha status cancelado entre A e C'),
+                    ('sync_status_faturado', false, true, 'Sync Status: Faturado', 'Espelha status faturado de C para A'),
+                    ('sync_nf_link', false, true, 'Enviar NF', 'Envia dados da NF de C para observações de A')
                 ON CONFLICT (key) DO UPDATE SET functional = EXCLUDED.functional, label = EXCLUDED.label, description = EXCLUDED.description
             """)
             
@@ -565,23 +587,23 @@ async def upsert_orders_a_fetch_error(venda_a_id: str, status_code: int, error_b
         """, venda_a_id, last_error)
 
 
-async def upsert_orders_map_with_b(external_key: str, venda_a_id: str, venda_b_id: str | None) -> None:
+async def upsert_orders_map_with_c(external_key: str, venda_a_id: str, venda_c_id: str | None) -> None:
     p = await get_pool()
     async with p.acquire() as conn:
         await conn.execute("""
-            INSERT INTO public.orders_map (external_key, venda_a_id, venda_b_id, updated_at)
+            INSERT INTO public.orders_map (external_key, venda_a_id, venda_c_id, updated_at)
             VALUES ($1, $2, $3, NOW())
             ON CONFLICT (external_key) DO UPDATE SET 
-                venda_b_id = EXCLUDED.venda_b_id,
+                venda_c_id = EXCLUDED.venda_c_id,
                 updated_at = NOW()
-        """, external_key, venda_a_id, venda_b_id)
+        """, external_key, venda_a_id, venda_c_id)
 
 
 async def get_orders_map_list(limit: int) -> list[dict]:
     p = await get_pool()
     async with p.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT external_key, venda_a_id, venda_b_id, created_at, updated_at
+            SELECT external_key, venda_a_id, venda_c_id, created_at, updated_at
             FROM public.orders_map
             ORDER BY updated_at DESC
             LIMIT $1
@@ -593,9 +615,9 @@ async def get_order_mapping_by_a(venda_a_id: str) -> dict | None:
     p = await get_pool()
     async with p.acquire() as conn:
         row = await conn.fetchrow("""
-            SELECT external_key, venda_a_id, venda_b_id
+            SELECT external_key, venda_a_id, venda_c_id
             FROM public.orders_map
-            WHERE venda_a_id = $1 AND venda_b_id IS NOT NULL
+            WHERE venda_a_id = $1 AND venda_c_id IS NOT NULL
         """, venda_a_id)
         return dict(row) if row else None
 
@@ -620,7 +642,7 @@ async def get_nf_event_payload(id_nota_fiscal: str) -> dict | None:
         return None
 
 
-async def get_venda_b_by_nota_fiscal(id_nota_fiscal: str) -> str | None:
+async def get_venda_c_by_nota_fiscal(id_nota_fiscal: str) -> str | None:
     p = await get_pool()
     async with p.acquire() as conn:
         row = await conn.fetchrow("""
@@ -635,18 +657,18 @@ async def get_venda_b_by_nota_fiscal(id_nota_fiscal: str) -> str | None:
         return str(row["venda_id"]) if row else None
 
 
-async def get_order_mapping_by_b(venda_b_id: str) -> dict | None:
+async def get_order_mapping_by_c(venda_c_id: str) -> dict | None:
     p = await get_pool()
     async with p.acquire() as conn:
         row = await conn.fetchrow("""
-            SELECT external_key, venda_a_id, venda_b_id
+            SELECT external_key, venda_a_id, venda_c_id
             FROM public.orders_map
-            WHERE venda_b_id::text = $1
-        """, venda_b_id)
+            WHERE venda_c_id::text = $1
+        """, venda_c_id)
         return dict(row) if row else None
 
 
-async def update_orders_map_sync(venda_a_id: str, venda_b_id: str, sync_status: str) -> None:
+async def update_orders_map_sync(venda_a_id: str, venda_c_id: str, sync_status: str) -> None:
     """Atualiza last_sync_status e last_sync_at no orders_map após sync_status executar."""
     p = await get_pool()
     async with p.acquire() as conn:
@@ -654,8 +676,8 @@ async def update_orders_map_sync(venda_a_id: str, venda_b_id: str, sync_status: 
             await conn.execute("""
                 UPDATE public.orders_map
                 SET last_sync_status = $3, last_sync_at = NOW(), updated_at = NOW()
-                WHERE venda_a_id::text = $1 OR venda_b_id::text = $2
-            """, venda_a_id, venda_b_id, sync_status)
+                WHERE venda_a_id::text = $1 OR venda_c_id::text = $2
+            """, venda_a_id, venda_c_id, sync_status)
         except Exception as e:
             logger.error(f"Failed to update orders_map sync: {e}")
 
@@ -674,7 +696,7 @@ async def check_is_echo(source: str, venda_id: str, codigo_situacao: str) -> boo
         elif source == "B":
             row = await conn.fetchrow("""
                 SELECT last_sync_status, last_sync_at FROM public.orders_map
-                WHERE venda_b_id::text = $1
+                WHERE venda_c_id::text = $1
                   AND last_sync_status = $2
                   AND last_sync_at > NOW() - INTERVAL '5 minutes'
             """, venda_id, codigo_situacao)
@@ -697,18 +719,18 @@ async def update_event_action_result(event_id: str, action_result: str) -> None:
             logger.error(f"Failed to update event action_result: {e}")
 
 
-async def count_orders_replicated_to_b() -> int:
-    """Conta quantos pedidos foram replicados para B (orders_map com venda_b_id preenchido)."""
+async def count_orders_replicated_to_c() -> int:
+    """Conta quantos pedidos foram replicados para C (orders_map com venda_c_id preenchido)."""
     p = await get_pool()
     async with p.acquire() as conn:
         row = await conn.fetchrow("""
-            SELECT COUNT(*) as cnt FROM public.orders_map WHERE venda_b_id IS NOT NULL
+            SELECT COUNT(*) as cnt FROM public.orders_map WHERE venda_c_id IS NOT NULL
         """)
         return row['cnt'] if row else 0
 
 
 async def load_products_map() -> dict[int, int]:
-    """Carrega mapeamento de produtos A -> B da tabela products_map."""
+    """Carrega mapeamento de produtos A -> C da tabela products_map."""
     p = await get_pool()
     async with p.acquire() as conn:
         rows = await conn.fetch("""
@@ -856,7 +878,7 @@ async def get_dashboard_data() -> dict:
         """)
 
         replicated = await conn.fetchval("""
-            SELECT COUNT(*) FROM public.orders_map WHERE venda_b_id IS NOT NULL
+            SELECT COUNT(*) FROM public.orders_map WHERE venda_c_id IS NOT NULL
         """)
 
         return {

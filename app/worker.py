@@ -84,17 +84,17 @@ SKU_ALIAS = {
     "Rosto-5": "Rosto-5too",
 }
 
-DROPSHIPPING_DEPOSIT_ID = 0  # TODO: ID do depósito de dropshipping em A para V365
+DROPSHIPPING_DEPOSIT_ID = 0  # TODO: ID do depósito V365 em Tiny A (Matriz Vitória - ES, old Muy Bela=846978907) — confirmar com João
 
-DEST1_FE_SEDEX_ID = 0         # TODO: ID forma envio Sedex em V365
-DEST1_FE_FM_ID = 0            # TODO: ID forma envio FM em V365
-DEST1_FE_PAC_ID = 0           # TODO: ID forma envio PAC em V365
+DEST1_FE_SEDEX_ID = 909868692   # formaEnvio: Rejuderme - Correios (Sedex) em V365
+DEST1_FE_FM_ID = 909865320      # formaEnvio: Rejuderme - FM Transportes em V365
+DEST1_FE_PAC_ID = 909863133     # formaEnvio: Rejuderme - Correios (PAC) em V365
 DEST1_FE_ME_ID = 0
-DEST1_PRICE_LIST_ID = 0       # TODO: ID da lista de preço em V365
+DEST1_PRICE_LIST_ID = 0         # TODO: ID da lista de preço em V365 — confirmar com João
 
-DEST1_FF_FM_STANDARD_ID = 0   # TODO: ID forma frete FM Standard em V365
-DEST1_FF_SEDEX_ID = 0         # TODO: ID forma frete Sedex em V365
-DEST1_FF_PAC_ID = 0           # TODO: ID forma frete PAC em V365
+DEST1_FF_FM_STANDARD_ID = 0     # TODO: ID forma frete FM Standard em V365 — confirmar com João
+DEST1_FF_SEDEX_ID = 3220        # formaFrete: SEDEX CONTRATO AG (03220) em V365
+DEST1_FF_PAC_ID = 3298          # formaFrete: PAC CONTRATO AG (03298) em V365
 
 FORMA_ENVIO_MAP = {
     "FM Transportes": {
@@ -473,7 +473,7 @@ async def process_job(job: dict) -> None:
                 "itens": itens_b,
                 "enderecoEntrega": endereco_entrega,
                 "listaPreco": {"id": DEST1_PRICE_LIST_ID},
-                "vendedor": {"id": 0},  # TODO: ID do vendedor em V365
+                "vendedor": {"id": 906538550},  # Rejuderme em V365
                 "transportador": build_transportador_v3(
                     forma_envio_origem=forma_envio_src,
                     forma_frete_origem=forma_frete_src,
@@ -485,16 +485,16 @@ async def process_job(job: dict) -> None:
                 "valorFrete": 0,
                 "valorDesconto": 0,
                 "pagamento": {
-                    "formaPagamento": {"id": 0, "nome": "Conta V365"},  # TODO: ID forma pagamento em V365
-                    "formaRecebimento": {"id": 0, "nome": "Conta V365"},  # TODO: ID forma recebimento em V365
+                    "formaPagamento": {"id": 932361522, "nome": "Conta Rejuderme"},
+                    "formaRecebimento": {"id": 932361522, "nome": "Conta Rejuderme"},
                     "meioPagamento": None,
                     "condicaoPagamento": "0",
                     "parcelas": [
                         {
                             "dias": 0,
                             "observacoes": "API REJUDERME",
-                            "formaPagamento": {"id": 0, "nome": "Conta V365"},  # TODO: ID forma pagamento em V365
-                            "formaRecebimento": {"id": 0, "nome": "Conta V365"},  # TODO: ID forma recebimento em V365
+                            "formaPagamento": {"id": 932361522, "nome": "Conta Rejuderme"},
+                            "formaRecebimento": {"id": 932361522, "nome": "Conta Rejuderme"},
                             "meioPagamento": None
                         }
                     ]

@@ -177,20 +177,20 @@ Direct product ID mapping from Tiny A to Tiny B (hardcoded in worker.py):
 ### Transport Mapping (FORMA_ENVIO_MAP)
 Mapeamento completo de formas de envio de A para C (V365) com suporte a formas de frete:
 
-| Forma Envio A | ID Destino C (V365) | Formas de Frete |
-|---------------|---------------------|-----------------|
-| FM Transportes | TODO | Standard (default), EXPRESSO |
-| Correios (Sedex) | TODO | SEDEX CONTRATO AG (default), SEDEX 12, SEDEX 10, SEDEX HOJE |
-| Correios (PAC) | TODO | PAC CONTRATO AG (default), MINI ENVIOS |
-| Mercado Envios | (não configurado) | PAC, Sedex |
+| Forma Envio A | formaEnvio ID (V365) | formaFrete IDs (V365) |
+|---------------|----------------------|-----------------------|
+| FM Transportes | 909865320 | Standard: TODO (DEST1_FF_FM_STANDARD_ID) |
+| Correios (Sedex) | 909868692 | SEDEX: 3220 |
+| Correios (PAC) | 909863133 | PAC: 3298 |
+| Mercado Envios | (não configurado) | PAC: 3298, Sedex: 3220 |
 
-> **TODO**: Preencher os IDs de forma envio/frete (DEST1_FE_* e DEST1_FF_*) em worker.py com os IDs da V365 fornecidos pelo João.
+> **TODO restante**: DEST1_FF_FM_STANDARD_ID (ID forma frete Standard FM em V365), DEST1_PRICE_LIST_ID, DROPSHIPPING_DEPOSIT_ID (ID do depósito V365 em Tiny A).
 
 ### Order Payload Fields (create_order_b → cria em Tiny C / V365)
-- `listaPreco`: Links to price list in C — TODO: preencher DEST1_PRICE_LIST_ID
-- `vendedor`: TODO: preencher ID do vendedor em V365
+- `listaPreco`: Links to price list in C — TODO: preencher DEST1_PRICE_LIST_ID em worker.py
+- `vendedor.id`: 906538550 (Rejuderme em V365)
 - `transportador`: Maps shipping method via `build_transportador_v3()`
-  - `formaEnvio.id`: ID da forma de envio mapeada
+  - `formaEnvio.id`: ID da forma de envio mapeada (V365)
   - `formaEnvio.formaFrete`: Tipo de frete (Standard, SEDEX CONTRATO AG, etc)
   - `volumes`: Quantidade de volumes do pedido original
   - `codigoRastreamento`: Código de rastreio (se disponível)
@@ -198,11 +198,11 @@ Mapeamento completo de formas de envio de A para C (V365) com suporte a formas d
 - `numeroOrdemCompra`: Source order number
 - `ecommerce.numeroPedidoEcommerce`: E-commerce reference
 - `observacoes`: Inclui dados de origem (forma de envio/frete original)
-- `pagamento`: Bloco fixo para todos os pedidos replicados — TODO: preencher IDs de forma de pagamento/recebimento da V365
-  - `formaPagamento.id`: TODO — ID forma pagamento em V365 ("Conta V365")
-  - `formaRecebimento.id`: TODO — ID forma recebimento em V365
+- `pagamento`: Bloco fixo para todos os pedidos replicados
+  - `formaPagamento.id`: 932361522 ("Conta Rejuderme" em V365)
+  - `formaRecebimento.id`: 932361522
   - `condicaoPagamento`: "0"
-  - 1 parcela: dias=0, obs="API REJUDERME", formaPagamento/formaRecebimento com IDs V365
+  - 1 parcela: dias=0, obs="API REJUDERME", formaPagamento/formaRecebimento 932361522
 - **Marcador**: Após criar o pedido, adiciona marcador "API Rejuderme" via `POST /pedidos/{id}/marcadores` (falha no marcador não impede o job de concluir)
 
 ## Running

@@ -97,8 +97,20 @@ td { padding: 8px; border-bottom: 1px solid #1e293b; }
   </div>
 
   <div class="card">
-    <h2>Histórico de Importações</h2>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <h2>Histórico de Importações</h2>
+      <div style="display:flex;align-items:center;gap:8px">
+        <label style="font-size:0.78rem;color:#94a3b8">Por página:</label>
+        <select id="perPage" onchange="runsPage=0;loadRuns()" style="background:#0f172a;border:1px solid #475569;border-radius:6px;color:#e2e8f0;padding:4px 8px;font-size:0.85rem">
+          <option value="5" selected>5</option>
+          <option value="10">10</option>
+          <option value="25">25</option>
+          <option value="50">50</option>
+        </select>
+      </div>
+    </div>
     <div id="runsList"><div class="empty-msg">Carregando...</div></div>
+    <div id="runsPagination" style="display:flex;justify-content:space-between;align-items:center;margin-top:12px"></div>
   </div>
 
   <div class="card detail-panel" id="detailPanel">
@@ -122,6 +134,8 @@ td { padding: 8px; border-bottom: 1px solid #1e293b; }
 <script>
 let pollTimer = null;
 let activeRunId = null;
+let runsPage = 0;
+let runsTotal = 0;
 
 function toggleModoFim() {
   const modo = document.getElementById('modoFim').value;
@@ -131,11 +145,15 @@ function toggleModoFim() {
 
 async function loadRuns() {
   try {
-    const res = await fetch('/admin/import');
+    const perPage = parseInt(document.getElementById('perPage').value);
+    const offset = runsPage * perPage;
+    const res = await fetch(`/admin/import?limit=${perPage}&offset=${offset}`);
     const data = await res.json();
     const runs = data.runs || [];
-    if (!runs.length) {
+    runsTotal = data.total || 0;
+    if (!runsTotal) {
       document.getElementById('runsList').innerHTML = '<div class="empty-msg">Nenhuma importação realizada</div>';
+      document.getElementById('runsPagination').innerHTML = '';
       return;
     }
     let html = '<table><thead><tr><th>#</th><th>Status</th><th>Período</th><th>Páginas</th><th>Encontrados</th><th>Jobs</th><th>Já Imp.</th><th>Ignorados</th><th>Iniciado</th></tr></thead><tbody>';
@@ -155,8 +173,19 @@ async function loadRuns() {
     }
     html += '</tbody></table>';
     document.getElementById('runsList').innerHTML = html;
+    const totalPages = Math.ceil(runsTotal / perPage);
+    const from = offset + 1;
+    const to = Math.min(offset + perPage, runsTotal);
+    let pagHtml = `<span style="font-size:0.8rem;color:#94a3b8">${from}-${to} de ${runsTotal}</span><div style="display:flex;gap:6px">`;
+    pagHtml += `<button class="btn btn-sm" style="background:#334155;color:#e2e8f0" onclick="runsPage=0;loadRuns()" ${runsPage===0?'disabled':''}>&laquo;</button>`;
+    pagHtml += `<button class="btn btn-sm" style="background:#334155;color:#e2e8f0" onclick="runsPage--;loadRuns()" ${runsPage===0?'disabled':''}>Anterior</button>`;
+    pagHtml += `<button class="btn btn-sm" style="background:#334155;color:#e2e8f0" onclick="runsPage++;loadRuns()" ${runsPage>=totalPages-1?'disabled':''}>Próxima</button>`;
+    pagHtml += `<button class="btn btn-sm" style="background:#334155;color:#e2e8f0" onclick="runsPage=${totalPages-1};loadRuns()" ${runsPage>=totalPages-1?'disabled':''}>&raquo;</button>`;
+    pagHtml += '</div>';
+    document.getElementById('runsPagination').innerHTML = pagHtml;
   } catch(e) {
     document.getElementById('runsList').innerHTML = '<div class="empty-msg">Erro ao carregar</div>';
+    document.getElementById('runsPagination').innerHTML = '';
   }
 }
 

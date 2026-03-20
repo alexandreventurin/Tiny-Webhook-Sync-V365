@@ -987,18 +987,19 @@ async def get_import_run_items(run_id: int, limit: int = 200, offset: int = 0) -
         return [dict(r) for r in rows]
 
 
-async def get_import_runs_list() -> list:
+async def get_import_runs_list(limit: int = 5, offset: int = 0) -> tuple[list, int]:
     p = await get_pool()
     async with p.acquire() as conn:
+        total = await conn.fetchval("SELECT COUNT(*) FROM public.import_runs")
         rows = await conn.fetch("""
             SELECT id, status, data_inicio, data_fim, direction, limit_pages,
                    pages_fetched, orders_found, jobs_created, orders_skipped, orders_ignored,
                    started_at, finished_at, error, created_at
             FROM public.import_runs
             ORDER BY id DESC
-            LIMIT 20
-        """)
-        return [dict(r) for r in rows]
+            LIMIT $1 OFFSET $2
+        """, limit, offset)
+        return [dict(r) for r in rows], total
 
 
 async def check_order_exists_in_map(venda_a_id: str) -> bool:

@@ -867,15 +867,15 @@ async def admin_import_detail(run_id: int, items_limit: int = 200, items_offset:
 
 
 @app.get("/admin/import")
-async def admin_import_list():
+async def admin_import_list(limit: int = 5, offset: int = 0):
     from app.db import get_import_runs_list
 
-    runs = await get_import_runs_list()
+    runs, total = await get_import_runs_list(limit=limit, offset=offset)
     for run in runs:
         for key in ['started_at', 'finished_at', 'created_at']:
             if run.get(key):
                 run[key] = str(run[key])
-    return {"runs": runs}
+    return {"runs": runs, "total": total}
 
 
 @app.post("/admin/import/{run_id}/cancel")

@@ -151,6 +151,21 @@ class TinyClient:
                 return {}
             return response.json()
 
+    async def list_orders(self, pagina: int = 1, data_inicial: str = None, data_final: str = None, limite: int = 100, sort: str = None) -> dict:
+        url = f"{self._base_url}/pedidos"
+        params = {"pagina": pagina, "limite": min(limite, 100)}
+        if data_inicial:
+            params["dataInicial"] = data_inicial
+        if data_final:
+            params["dataFinal"] = data_final
+        if sort:
+            params["sort"] = sort
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, headers=self._headers(), params=params)
+            if response.status_code != 200:
+                raise TinyApiError(response.status_code, response.text, url)
+            return response.json()
+
     async def list_all_products(self, limit: int = 100) -> list:
         url = f"{self._base_url}/produtos"
         all_products = []

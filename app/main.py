@@ -31,6 +31,10 @@ from app.worker import worker_loop, stop_worker, run_worker_once, run_worker_onc
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    from app.db import recover_stale_import_runs
+    recovered = await recover_stale_import_runs()
+    if recovered:
+        logging.getLogger(__name__).info(f"Recovered {recovered} stale import run(s) from previous restart")
     worker_task = asyncio.create_task(worker_loop())
     yield
     stop_worker()
@@ -813,6 +817,66 @@ async def auth_a_callback(code: str | None = None, error: str | None = None, err
         return {"ok": True, "account": "A", "expires_in": expires_in}
     except Exception as e:
         return {"error": str(e)}
+
+
+@app.get("/import")
+async def import_page():
+    return FileResponse("app/static/import.html")
+
+
+@app.post("/admin/import/start")
+async def admin_import_start(
+    data_inicio: str = "2025-12-15",
+    data_fim: str = "2026-03-19",
+    direction: str = "desc",
+    limit_pages: int | None = None
+):
+    from app.db import has_running_import
+    from app.backfill import start_import
+
+    if await has_running_import():
+        return JSONResponse(status_code=409, content={"error": "already_running", "message": "Já existe uma importação em andamento"})
+
+    run_id = await start_import(data_inicio, data_fim, direction, limit_pages)
+    return {"ok": True, "run_id": run_id}
+
+
+@app.get("/admin/import/{run_id}")
+async def admin_import_detail(run_id: int, items_limit: int = 200, items_offset: int = 0):
+    from app.db import get_import_run, get_import_run_items
+
+    run = await get_import_run(run_id)
+    if not run:
+        return JSONResponse(status_code=404, content={"error": "not_found"})
+
+    items = await get_import_run_items(run_id, limit=items_limit, offset=items_offset)
+    for key in ['started_at', 'finished_at', 'created_at']:
+        if run.get(key):
+            run[key] = str(run[key])
+    for item in items:
+        if item.get('created_at'):
+            item['created_at'] = str(item['created_at'])
+
+    return {"run": run, "items": items}
+
+
+@app.get("/admin/import")
+async def admin_import_list():
+    from app.db import get_import_runs_list
+
+    runs = await get_import_runs_list()
+    for run in runs:
+        for key in ['started_at', 'finished_at', 'created_at']:
+            if run.get(key):
+                run[key] = str(run[key])
+    return {"runs": runs}
+
+
+@app.post("/admin/import/{run_id}/cancel")
+async def admin_import_cancel(run_id: int):
+    from app.backfill import cancel_import
+    cancelled = cancel_import(run_id)
+    return {"ok": cancelled, "run_id": run_id}
 
 
 @app.get("/auth/c/callback")

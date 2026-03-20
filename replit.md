@@ -16,8 +16,10 @@ app/
 ├── utils.py        # Helper functions (hashing, key generation)
 ├── worker.py       # Job worker and processing logic
 ├── tiny_client.py  # HTTP client for Tiny API
+├── backfill.py     # Bulk import background coroutine (A → C)
 └── static/
-    └── dashboard.html  # Dashboard UI (controles + atividade)
+    ├── dashboard.html  # Dashboard UI (controles + atividade)
+    └── import.html     # Bulk import UI page
 ```
 
 ## Environment Variables
@@ -69,6 +71,13 @@ app/
 - `GET /admin/orders-a?limit=50` - List order snapshots
 - `GET /admin/orders-a/{venda_a_id}` - Get specific order snapshot
 - `GET /admin/orders-map?limit=50` - List order mappings (A -> B)
+
+### Bulk Import
+- `GET /import` - UI para importação em massa (pedidos antigos de A → C)
+- `POST /admin/import/start?data_inicio=2025-12-15&data_fim=2026-03-19&direction=desc&limit_pages=5` - Inicia importação em background
+- `GET /admin/import` - Lista todas as importações
+- `GET /admin/import/{run_id}` - Detalhes de uma importação (com itens)
+- `POST /admin/import/{run_id}/cancel` - Cancela importação em andamento
 
 ### Auth Diagnosis
 - `GET /admin/tiny_a/ping?venda_id=XXXXX` - Test Tiny A auth (GET /pedidos/{id})

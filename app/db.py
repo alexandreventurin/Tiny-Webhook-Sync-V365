@@ -208,6 +208,39 @@ async def init_db():
                     ('sync_nf_link', false, true, 'Enviar NF', 'Envia dados da NF de C para observações de A')
                 ON CONFLICT (key) DO UPDATE SET functional = EXCLUDED.functional, label = EXCLUDED.label, description = EXCLUDED.description
             """)
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS public.import_runs (
+                    id SERIAL PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    data_inicio TEXT NOT NULL,
+                    data_fim TEXT NOT NULL,
+                    direction TEXT NOT NULL DEFAULT 'desc',
+                    limit_pages INTEGER,
+                    pages_fetched INTEGER DEFAULT 0,
+                    orders_found INTEGER DEFAULT 0,
+                    jobs_created INTEGER DEFAULT 0,
+                    orders_skipped INTEGER DEFAULT 0,
+                    orders_ignored INTEGER DEFAULT 0,
+                    started_at TIMESTAMPTZ,
+                    finished_at TIMESTAMPTZ,
+                    error TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS public.import_run_items (
+                    id SERIAL PRIMARY KEY,
+                    run_id INTEGER REFERENCES public.import_runs(id),
+                    venda_a_id TEXT NOT NULL,
+                    numero_pedido TEXT,
+                    data_pedido TEXT,
+                    status_em_a TEXT,
+                    action TEXT NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
             
         logger.info("Database connected and tables created")
     except Exception as e:
@@ -889,3 +922,110 @@ async def get_dashboard_data() -> dict:
             "recent_jobs": [dict(r) for r in recent_jobs],
             "orders_replicated": replicated,
         }
+
+
+async def create_import_run(data_inicio: str, data_fim: str, direction: str, limit_pages: int | None) -> int:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchrow("""
+            INSERT INTO public.import_runs (status, data_inicio, data_fim, direction, limit_pages, started_at)
+            VALUES ('running', $1, $2, $3, $4, NOW())
+            RETURNING id
+        """, data_inicio, data_fim, direction, limit_pages)
+        return row["id"]
+
+
+async def update_import_run_progress(run_id: int, pages_fetched: int, orders_found: int,
+                                      jobs_created: int, orders_skipped: int, orders_ignored: int):
+    p = await get_pool()
+    async with p.acquire() as conn:
+        await conn.execute("""
+            UPDATE public.import_runs
+            SET pages_fetched = $2, orders_found = $3, jobs_created = $4,
+                orders_skipped = $5, orders_ignored = $6
+            WHERE id = $1
+        """, run_id, pages_fetched, orders_found, jobs_created, orders_skipped, orders_ignored)
+
+
+async def finish_import_run(run_id: int, status: str, error: str | None = None):
+    p = await get_pool()
+    async with p.acquire() as conn:
+        await conn.execute("""
+            UPDATE public.import_runs
+            SET status = $2, finished_at = NOW(), error = $3
+            WHERE id = $1
+        """, run_id, status, error)
+
+
+async def insert_import_run_item(run_id: int, venda_a_id: str, numero_pedido: str | None,
+                                  data_pedido: str | None, status_em_a: str | None, action: str):
+    p = await get_pool()
+    async with p.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO public.import_run_items (run_id, venda_a_id, numero_pedido, data_pedido, status_em_a, action)
+            VALUES ($1, $2, $3, $4, $5, $6)
+        """, run_id, venda_a_id, numero_pedido, data_pedido, status_em_a, action)
+
+
+async def get_import_run(run_id: int) -> dict | None:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM public.import_runs WHERE id = $1", run_id)
+        return dict(row) if row else None
+
+
+async def get_import_run_items(run_id: int, limit: int = 200, offset: int = 0) -> list:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT venda_a_id, numero_pedido, data_pedido, status_em_a, action, created_at
+            FROM public.import_run_items
+            WHERE run_id = $1
+            ORDER BY id DESC
+            LIMIT $2 OFFSET $3
+        """, run_id, limit, offset)
+        return [dict(r) for r in rows]
+
+
+async def get_import_runs_list() -> list:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id, status, data_inicio, data_fim, direction, limit_pages,
+                   pages_fetched, orders_found, jobs_created, orders_skipped, orders_ignored,
+                   started_at, finished_at, error, created_at
+            FROM public.import_runs
+            ORDER BY id DESC
+            LIMIT 20
+        """)
+        return [dict(r) for r in rows]
+
+
+async def check_order_exists_in_map(venda_a_id: str) -> bool:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchval(
+            "SELECT 1 FROM public.orders_map WHERE venda_a_id = $1", venda_a_id
+        )
+        return row is not None
+
+
+async def has_running_import() -> bool:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchval(
+            "SELECT 1 FROM public.import_runs WHERE status = 'running'"
+        )
+        return row is not None
+
+
+async def recover_stale_import_runs() -> int:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE public.import_runs
+            SET status = 'error', finished_at = NOW(), error = 'Process restarted during import'
+            WHERE status = 'running'
+        """)
+        count = int(result.split()[-1]) if result else 0
+        return count

@@ -523,10 +523,23 @@ async def process_job(job: dict) -> None:
                 tag_job_created = await insert_job(job_type="add_tag_c", dedupe_key=tag_dedupe, event_id=None, payload=tag_payload, delay_minutes=1)
                 if tag_job_created:
                     logger.info(f"Job {job_id}: tag failed, created add_tag_c job for order {venda_c_id}")
-            
+
+            force_status_c = payload.get('force_status_c')
+            force_status_applied = False
+            if force_status_c and venda_c_id:
+                FORCE_SITUACAO_CODE = {"entregue": 6}
+                force_code = FORCE_SITUACAO_CODE.get(force_status_c)
+                if force_code:
+                    try:
+                        await call_tiny("B", client_c, "update_order_status", venda_c_id, force_code)
+                        force_status_applied = True
+                        logger.info(f"Job {job_id}: forced status '{force_status_c}' ({force_code}) on C order {venda_c_id}")
+                    except Exception as e:
+                        logger.warning(f"Job {job_id}: failed to force status '{force_status_c}' on C order {venda_c_id}: {e}")
+
             action_preview = {
                 "would": "create_order_in_C",
-                "situacao_target": "em_aberto",
+                "situacao_target": force_status_c if force_status_applied else "em_aberto",
                 "venda_a_id": venda_id,
                 "venda_c_id": venda_c_id,
                 "external_key": external_key,
@@ -538,10 +551,12 @@ async def process_job(job: dict) -> None:
                 "volumes": volumes_src,
                 "created": True,
                 "tag_added": tag_added,
-                "tag_job_created": tag_job_created if not tag_added else None
+                "tag_job_created": tag_job_created if not tag_added else None,
+                "force_status_c": force_status_c if force_status_c else None,
+                "force_status_applied": force_status_applied if force_status_c else None
             }
             await update_job_done(job_id, action_preview)
-            logger.info(f"Job {job_id} completed: created order in C with id {venda_c_id} (envio={forma_envio_src}, frete={forma_frete_src}, tag={tag_added})")
+            logger.info(f"Job {job_id} completed: created order in C with id {venda_c_id} (envio={forma_envio_src}, frete={forma_frete_src}, tag={tag_added}, force={force_status_applied if force_status_c else 'n/a'})")
         
         elif job_type == 'fetch_order_a':
             if not venda_id:
@@ -592,6 +607,8 @@ async def process_job(job: dict) -> None:
                         "codigo_situacao": codigo_situacao, "id_nota_fiscal": id_nota_fiscal,
                         "from_fetch_order_a": True
                     }
+                    if payload.get('force_status_c'):
+                        create_order_payload["force_status_c"] = payload["force_status_c"]
                     await insert_job(job_type="create_order_c", dedupe_key=create_order_dedupe_key, event_id=None, payload=create_order_payload)
                     return
             
@@ -628,6 +645,8 @@ async def process_job(job: dict) -> None:
                 "id_nota_fiscal": id_nota_fiscal,
                 "from_fetch_order_a": True
             }
+            if payload.get('force_status_c'):
+                create_order_payload["force_status_c"] = payload["force_status_c"]
             await insert_job(job_type="create_order_c", dedupe_key=create_order_dedupe_key, event_id=None, payload=create_order_payload)
             logger.info(f"Chained create_order_c job for venda {venda_id}")
         

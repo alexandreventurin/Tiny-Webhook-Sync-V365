@@ -162,6 +162,11 @@ async def webhook_a_vendas(request: Request):
     return await process_webhook(request, source="A", topic="vendas")
 
 
+@app.post("/webhooks/rejuderme/vendas", response_model=WebhookResponse)
+async def webhook_rejuderme_vendas(request: Request):
+    return await process_webhook(request, source="A", topic="vendas")
+
+
 @app.post("/webhooks/c/vendas", response_model=WebhookResponse)
 async def webhook_c_vendas(request: Request):
     return await process_webhook(request, source="B", topic="vendas")

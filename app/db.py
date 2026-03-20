@@ -200,7 +200,8 @@ async def init_db():
 
             await conn.execute("""
                 INSERT INTO public.feature_flags (key, enabled, functional, label, description) VALUES
-                    ('replicate_orders', false, true, 'Replicar Pedidos', 'Cria pedidos em C quando A é aprovado'),
+                    ('replicate_orders', false, true, 'Replicar Pedidos (Webhook)', 'Cria pedidos em C quando A é aprovado via webhook'),
+                    ('replicate_imports', false, true, 'Replicar Pedidos (Importação)', 'Cria pedidos em C vindos da importação em massa'),
                     ('sync_status_enviado', false, true, 'Sync Status: Enviado', 'Espelha status enviado de A para C'),
                     ('sync_status_entregue', false, true, 'Sync Status: Entregue', 'Espelha status entregue de A para C'),
                     ('sync_status_cancelado', false, true, 'Sync Status: Cancelado', 'Espelha status cancelado entre A e C'),

@@ -278,10 +278,12 @@ async def process_job(job: dict) -> None:
     
     try:
         if job_type == 'create_order_c':
-            if not await get_feature_flag("replicate_orders"):
-                action_preview = {"would": "create_order_in_C", "skipped": True, "reason": "replicate_orders flag disabled"}
+            is_from_backfill = payload.get('from_backfill') or payload.get('force_status_c')
+            flag_key = "replicate_imports" if is_from_backfill else "replicate_orders"
+            if not await get_feature_flag(flag_key):
+                action_preview = {"would": "create_order_in_C", "skipped": True, "reason": f"{flag_key} flag disabled"}
                 await update_job_done(job_id, action_preview)
-                logger.info(f"Job {job_id} skipped: replicate_orders flag disabled")
+                logger.info(f"Job {job_id} skipped: {flag_key} flag disabled")
                 return
 
             if not venda_id:
@@ -609,6 +611,8 @@ async def process_job(job: dict) -> None:
                     }
                     if payload.get('force_status_c'):
                         create_order_payload["force_status_c"] = payload["force_status_c"]
+                    if payload.get('from_backfill'):
+                        create_order_payload["from_backfill"] = True
                     await insert_job(job_type="create_order_c", dedupe_key=create_order_dedupe_key, event_id=None, payload=create_order_payload)
                     return
             
@@ -647,6 +651,8 @@ async def process_job(job: dict) -> None:
             }
             if payload.get('force_status_c'):
                 create_order_payload["force_status_c"] = payload["force_status_c"]
+            if payload.get('from_backfill'):
+                create_order_payload["from_backfill"] = True
             await insert_job(job_type="create_order_c", dedupe_key=create_order_dedupe_key, event_id=None, payload=create_order_payload)
             logger.info(f"Chained create_order_c job for venda {venda_id}")
         

@@ -317,7 +317,7 @@ async function loadAuth() {
     const accounts = {A: null, B: null};
     (data.tokens || []).forEach(t => { accounts[t.account] = t; });
     const labels = {A: 'Tiny A (Rejuderme)', B: 'Tiny C (V365)'};
-    const authPaths = {A: '/auth/a/start', B: '/auth/b/start'};
+    const authPaths = {A: '/auth/a/start', B: '/auth/c/start'};
     bar.innerHTML = ['A','B'].map(acc => {
       const t = accounts[acc];
       const h = health[acc];

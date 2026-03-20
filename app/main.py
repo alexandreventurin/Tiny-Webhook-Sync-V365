@@ -148,23 +148,23 @@ async def webhook_a_vendas(request: Request):
     return await process_webhook(request, source="A", topic="vendas")
 
 
-@app.post("/webhooks/b/vendas", response_model=WebhookResponse)
-async def webhook_b_vendas(request: Request):
+@app.post("/webhooks/c/vendas", response_model=WebhookResponse)
+async def webhook_c_vendas(request: Request):
     return await process_webhook(request, source="B", topic="vendas")
 
 
-@app.post("/webhooks/b/notas", response_model=WebhookResponse)
-async def webhook_b_notas(request: Request):
+@app.post("/webhooks/c/notas", response_model=WebhookResponse)
+async def webhook_c_notas(request: Request):
     return await process_webhook(request, source="B", topic="notas")
 
 
-@app.post("/webhooks/b/enviados", response_model=WebhookResponse)
-async def webhook_b_enviados(request: Request):
+@app.post("/webhooks/c/enviados", response_model=WebhookResponse)
+async def webhook_c_enviados(request: Request):
     return await process_webhook(request, source="B", topic="enviados")
 
 
-@app.post("/webhooks/b/notas_fiscais", response_model=WebhookResponse)
-async def webhook_b_notas_fiscais(request: Request):
+@app.post("/webhooks/c/notas_fiscais", response_model=WebhookResponse)
+async def webhook_c_notas_fiscais(request: Request):
     payload = await request.json()
     
     dados = payload.get("dados") or {}
@@ -531,14 +531,14 @@ async def admin_products_map():
         return {"ok": False, "error": str(e)}
 
 
-@app.get("/admin/tiny_b/ping")
-async def admin_tiny_b_ping(venda_id: str):
+@app.get("/admin/tiny_c/ping")
+async def admin_tiny_c_ping(venda_id: str):
     from app.tiny_oauth import ensure_access_token
     from app.tiny_client import TinyClient
     
     token = await ensure_access_token("B")
     if not token:
-        return {"ok": False, "error": "No valid token for account B"}
+        return {"ok": False, "error": "No valid token for account C (V365)"}
     
     client = TinyClient(token)
     result = await client.ping_order(venda_id)
@@ -705,13 +705,13 @@ async def auth_a_start():
     return RedirectResponse(url=url, status_code=302)
 
 
-@app.get("/auth/b/start")
-async def auth_b_start():
+@app.get("/auth/c/start")
+async def auth_c_start():
     from fastapi.responses import RedirectResponse
     from app.tiny_oauth import build_auth_url
     url = build_auth_url("B")
     if not url:
-        return {"error": "TINY_B_CLIENT_ID not configured"}
+        return {"error": "TINY_C_CLIENT_ID not configured"}
     return RedirectResponse(url=url, status_code=302)
 
 
@@ -740,8 +740,8 @@ async def auth_a_callback(code: str | None = None, error: str | None = None, err
         return {"error": str(e)}
 
 
-@app.get("/auth/b/callback")
-async def auth_b_callback(code: str | None = None, error: str | None = None, error_description: str | None = None):
+@app.get("/auth/c/callback")
+async def auth_c_callback(code: str | None = None, error: str | None = None, error_description: str | None = None):
     from app.tiny_oauth import exchange_code_for_tokens, save_tokens_to_db
     
     if error:
@@ -760,6 +760,6 @@ async def auth_b_callback(code: str | None = None, error: str | None = None, err
             return {"error": "missing tokens in response", "raw": tokens}
         
         await save_tokens_to_db("B", access_token, refresh_token, expires_in)
-        return {"ok": True, "account": "B", "expires_in": expires_in}
+        return {"ok": True, "account": "C", "expires_in": expires_in}
     except Exception as e:
         return {"error": str(e)}

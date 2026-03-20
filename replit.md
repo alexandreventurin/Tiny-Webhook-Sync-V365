@@ -28,8 +28,8 @@ app/
 ### Tiny API Integration (OAuth V3)
 - `TINY_A_CLIENT_ID`: OAuth client ID for Tiny A
 - `TINY_A_CLIENT_SECRET`: OAuth client secret for Tiny A
-- `TINY_B_CLIENT_ID`: OAuth client ID for Tiny C (V365) — variável mantém nome "B" internamente
-- `TINY_B_CLIENT_SECRET`: OAuth client secret for Tiny C (V365)
+- `TINY_C_CLIENT_ID`: OAuth client ID for Tiny C (V365)
+- `TINY_C_CLIENT_SECRET`: OAuth client secret for Tiny C (V365)
 - `APP_BASE_URL`: Public URL for OAuth callbacks (e.g., https://your-app.replit.app)
 - `TINY_API_BASE`: API base URL (default: https://api.tiny.com.br/public-api/v3)
 - `TINY_AUTH_BASE`: Auth server URL (default: https://accounts.tiny.com.br)

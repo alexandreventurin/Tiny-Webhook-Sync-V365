@@ -6,7 +6,7 @@ from typing import Optional
 from app.settings import (
     TINY_AUTH_BASE, TINY_API_BASE,
     TINY_A_CLIENT_ID, TINY_A_CLIENT_SECRET,
-    TINY_B_CLIENT_ID, TINY_B_CLIENT_SECRET,
+    TINY_C_CLIENT_ID, TINY_C_CLIENT_SECRET,
     APP_BASE_URL
 )
 
@@ -19,12 +19,13 @@ def get_credentials(account: str) -> tuple[str, str]:
     if account == "A":
         return TINY_A_CLIENT_ID or "", TINY_A_CLIENT_SECRET or ""
     else:
-        return TINY_B_CLIENT_ID or "", TINY_B_CLIENT_SECRET or ""
+        return TINY_C_CLIENT_ID or "", TINY_C_CLIENT_SECRET or ""
 
 
 def get_redirect_uri(account: str) -> str:
     base = APP_BASE_URL.rstrip("/") if APP_BASE_URL else ""
-    return f"{base}/auth/{account.lower()}/callback"
+    path_segment = "c" if account == "B" else account.lower()
+    return f"{base}/auth/{path_segment}/callback"
 
 
 def build_auth_url(account: str) -> str | None:

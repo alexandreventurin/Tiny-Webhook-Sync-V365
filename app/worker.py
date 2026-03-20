@@ -84,7 +84,8 @@ SKU_ALIAS = {
     "Rosto-5": "Rosto-5too",
 }
 
-DROPSHIPPING_DEPOSIT_ID = 888616671  # ID do depósito "Matriz Vitória - ES" em V365
+DROPSHIPPING_DEPOSIT_ID_A = 336403602  # ID do depósito "Dropshipping (Muy Bela)" em Tiny A (Rejuderme)
+DROPSHIPPING_DEPOSIT_ID_C = 888616671  # ID do depósito equivalente em V365 (Tiny C)
 
 DEST1_FE_SEDEX_ID = 909868692   # formaEnvio: Rejuderme - Correios (Sedex) em V365
 DEST1_FE_FM_ID = 909865320      # formaEnvio: Rejuderme - FM Transportes em V365
@@ -319,7 +320,7 @@ async def process_job(job: dict) -> None:
             deposito = order_data.get('deposito') or {}
             deposito_id = deposito.get('id')
             deposito_nome = deposito.get('nome', '')
-            if deposito_id != DROPSHIPPING_DEPOSIT_ID:
+            if deposito_id != DROPSHIPPING_DEPOSIT_ID_A:
                 action_preview = {
                     "would": "create_order_in_C",
                     "skipped": True,
@@ -327,8 +328,8 @@ async def process_job(job: dict) -> None:
                     "venda_a_id": venda_id,
                     "deposito_id": deposito_id,
                     "deposito_nome": deposito_nome,
-                    "expected_deposit_id": DROPSHIPPING_DEPOSIT_ID,
-                    "note": f"Depósito '{deposito_nome}' não é Dropshipping (V365)"
+                    "expected_deposit_id": DROPSHIPPING_DEPOSIT_ID_A,
+                    "note": f"Depósito '{deposito_nome}' não é Dropshipping (Rejuderme)"
                 }
                 await update_job_done(job_id, action_preview)
                 logger.info(f"Job {job_id} skipped: deposit_not_allowed (deposito={deposito_nome}, id={deposito_id})")
@@ -472,6 +473,7 @@ async def process_job(job: dict) -> None:
                 "numeroOrdemCompra": str(order_data.get('numeroPedido') or ""),
                 "itens": itens_c,
                 "enderecoEntrega": endereco_entrega,
+                "deposito": {"id": DROPSHIPPING_DEPOSIT_ID_C},
                 "listaPreco": {"id": DEST1_PRICE_LIST_ID},
                 "vendedor": {"id": 906538550},  # Rejuderme em V365
                 "transportador": build_transportador_v3(

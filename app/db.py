@@ -618,7 +618,7 @@ async def get_order_mapping_by_a(venda_a_id: str) -> dict | None:
             SELECT external_key, venda_a_id, venda_c_id
             FROM public.orders_map
             WHERE venda_a_id = $1 AND venda_c_id IS NOT NULL
-        """, venda_a_id)
+        """, int(venda_a_id))
         return dict(row) if row else None
 
 
@@ -710,8 +710,7 @@ async def update_event_action_result(event_id: str, action_result: str) -> None:
     p = await get_pool()
     async with p.acquire() as conn:
         try:
-            import uuid
-            uid = uuid.UUID(event_id) if isinstance(event_id, str) else event_id
+            uid = int(event_id) if isinstance(event_id, str) else event_id
             await conn.execute("""
                 UPDATE public.events SET action_result = $2 WHERE id = $1
             """, uid, action_result)

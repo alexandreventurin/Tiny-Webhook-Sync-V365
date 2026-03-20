@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timedelta
 from app.db import (
     create_import_run, update_import_run_progress, finish_import_run,
     insert_import_run_item, check_order_exists_in_map, insert_job
@@ -12,13 +13,6 @@ logger = logging.getLogger(__name__)
 
 ELIGIBLE_STATUSES = {"pronto_envio", "enviado", "entregue"}
 
-
-def to_tiny_date(iso_date: str) -> str:
-    parts = iso_date.split("-")
-    if len(parts) == 3 and len(parts[0]) == 4:
-        return f"{parts[2]}/{parts[1]}/{parts[0]}"
-    return iso_date
-
 _running_tasks: dict[int, asyncio.Task] = {}
 
 
@@ -29,6 +23,12 @@ def extract_status(order: dict) -> str | None:
     else:
         raw = sit
     return normalize_status(raw)
+
+
+def compute_data_fim(data_inicio: str, dias: int) -> str:
+    dt = datetime.strptime(data_inicio, "%Y-%m-%d")
+    dt_fim = dt + timedelta(days=dias)
+    return dt_fim.strftime("%Y-%m-%d")
 
 
 async def run_import(run_id: int, data_inicio: str, data_fim: str, direction: str, limit_pages: int | None):
@@ -56,13 +56,11 @@ async def run_import(run_id: int, data_inicio: str, data_fim: str, direction: st
                 break
 
             sort_param = "data-desc" if direction == "desc" else "data-asc"
-            data_inicio_fmt = to_tiny_date(data_inicio)
-            data_fim_fmt = to_tiny_date(data_fim)
             try:
                 result = await client_a.list_orders(
                     pagina=pagina,
-                    data_inicial=data_inicio_fmt,
-                    data_final=data_fim_fmt,
+                    data_inicial=data_inicio,
+                    data_final=data_fim,
                     limite=100,
                     sort=sort_param
                 )
@@ -76,8 +74,8 @@ async def run_import(run_id: int, data_inicio: str, data_fim: str, direction: st
                     try:
                         result = await client_a.list_orders(
                             pagina=pagina,
-                            data_inicial=data_inicio_fmt,
-                            data_final=data_fim_fmt,
+                            data_inicial=data_inicio,
+                            data_final=data_fim,
                             limite=100,
                             sort=sort_param
                         )

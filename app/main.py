@@ -827,18 +827,24 @@ async def import_page():
 @app.post("/admin/import/start")
 async def admin_import_start(
     data_inicio: str = "2025-12-15",
-    data_fim: str = "2026-03-19",
+    data_fim: str | None = None,
+    dias: int | None = None,
     direction: str = "desc",
     limit_pages: int | None = None
 ):
     from app.db import has_running_import
-    from app.backfill import start_import
+    from app.backfill import start_import, compute_data_fim
 
     if await has_running_import():
         return JSONResponse(status_code=409, content={"error": "already_running", "message": "Já existe uma importação em andamento"})
 
+    if dias and not data_fim:
+        data_fim = compute_data_fim(data_inicio, dias)
+    elif not data_fim:
+        data_fim = "2026-03-19"
+
     run_id = await start_import(data_inicio, data_fim, direction, limit_pages)
-    return {"ok": True, "run_id": run_id}
+    return {"ok": True, "run_id": run_id, "data_inicio": data_inicio, "data_fim": data_fim}
 
 
 @app.get("/admin/import/{run_id}")

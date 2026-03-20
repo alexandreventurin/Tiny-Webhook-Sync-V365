@@ -66,6 +66,17 @@ td { padding: 8px; border-bottom: 1px solid #1e293b; }
         <input type="date" id="dataInicio" value="2025-12-15">
       </div>
       <div class="form-group">
+        <label>Período</label>
+        <select id="modoFim" onchange="toggleModoFim()">
+          <option value="dias">Quantidade de dias</option>
+          <option value="data">Data fim específica</option>
+        </select>
+      </div>
+      <div class="form-group" id="diasGroup">
+        <label>Dias</label>
+        <input type="number" id="dias" value="7" min="1" max="365" style="width:80px">
+      </div>
+      <div class="form-group" id="dataFimGroup" style="display:none">
         <label>Data Fim</label>
         <input type="date" id="dataFim" value="2026-03-19">
       </div>
@@ -112,6 +123,12 @@ td { padding: 8px; border-bottom: 1px solid #1e293b; }
 let pollTimer = null;
 let activeRunId = null;
 
+function toggleModoFim() {
+  const modo = document.getElementById('modoFim').value;
+  document.getElementById('diasGroup').style.display = modo === 'dias' ? '' : 'none';
+  document.getElementById('dataFimGroup').style.display = modo === 'data' ? '' : 'none';
+}
+
 async function loadRuns() {
   try {
     const res = await fetch('/admin/import');
@@ -149,10 +166,15 @@ async function startImport() {
   btn.textContent = 'Iniciando...';
   try {
     const dataInicio = document.getElementById('dataInicio').value;
-    const dataFim = document.getElementById('dataFim').value;
+    const modo = document.getElementById('modoFim').value;
     const direction = document.getElementById('direction').value;
     const limitPages = document.getElementById('limitPages').value;
-    const params = new URLSearchParams({ data_inicio: dataInicio, data_fim: dataFim, direction });
+    const params = new URLSearchParams({ data_inicio: dataInicio, direction });
+    if (modo === 'dias') {
+      params.append('dias', document.getElementById('dias').value);
+    } else {
+      params.append('data_fim', document.getElementById('dataFim').value);
+    }
     if (limitPages) params.append('limit_pages', limitPages);
     const res = await fetch('/admin/import/start?' + params.toString(), { method: 'POST' });
     const data = await res.json();

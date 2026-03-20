@@ -56,6 +56,7 @@ td { padding: 8px; border-bottom: 1px solid #1e293b; }
 <div class="container">
   <a href="/dashboard" class="back-link">&larr; Voltar ao Dashboard</a>
   <h1>Importação em Massa</h1>
+  <span id="buildTime" style="font-size:11px;font-weight:300;color:#475569"></span>
   <p class="subtitle">Importa pedidos antigos de A (Rejuderme) para C (V365) com status entregue</p>
 
   <div class="card">
@@ -326,6 +327,11 @@ function formatDate(dt) {
   } catch { return dt; }
 }
 
+fetch('/admin/server-info').then(r=>r.json()).then(d=>{
+  const dt=new Date(d.started_at);
+  const pad=n=>String(n).padStart(2,'0');
+  document.getElementById('buildTime').textContent=`Build: ${pad(dt.getDate())}/${pad(dt.getMonth()+1)}/${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+}).catch(()=>{});
 loadRuns();
 </script>
 </body>

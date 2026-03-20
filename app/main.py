@@ -2,6 +2,7 @@ import json
 import asyncio
 import logging
 import sys
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 from pathlib import Path
@@ -11,6 +12,7 @@ from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 
 APP_BUILD = "2026-02-05-001"
+SERVER_STARTED_AT = datetime.now(timezone.utc)
 
 from app.db import (
     init_db, close_db, insert_event, insert_job,
@@ -666,6 +668,11 @@ async def admin_tokens_health():
 async def dashboard():
     html_path = Path(__file__).parent / "static" / "dashboard.html"
     return HTMLResponse(content=html_path.read_text(encoding="utf-8"), headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/admin/server-info")
+async def admin_server_info():
+    return {"started_at": SERVER_STARTED_AT.isoformat()}
 
 
 @app.get("/admin/flags")

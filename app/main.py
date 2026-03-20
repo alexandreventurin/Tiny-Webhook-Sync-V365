@@ -511,6 +511,62 @@ async def admin_tiny_a_produtos_sync():
         return {"ok": False, "error": str(e)}
 
 
+@app.get("/admin/tiny_c/order")
+async def admin_tiny_c_order(venda_id: str):
+    from app.tiny_oauth import ensure_access_token
+    import httpx
+
+    token = await ensure_access_token("B")
+    if not token:
+        return {"ok": False, "error": "No valid token for Tiny C — refaça o OAuth em /auth/c/start"}
+
+    url = f"https://api.tiny.com.br/public-api/v3/pedidos/{venda_id}"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with httpx.AsyncClient(timeout=30.0) as http_client:
+        response = await http_client.get(url, headers=headers)
+        try:
+            body = response.json()
+        except Exception:
+            body = response.text
+        return {
+            "ok": response.status_code == 200,
+            "status_code": response.status_code,
+            "venda_id": venda_id,
+            "data": body
+        }
+
+
+@app.get("/admin/tiny_c/orders")
+async def admin_tiny_c_orders(ids: str):
+    """Busca múltiplos pedidos de Tiny C. ids = IDs separados por vírgula."""
+    from app.tiny_oauth import ensure_access_token
+    import httpx
+
+    token = await ensure_access_token("B")
+    if not token:
+        return {"ok": False, "error": "No valid token for Tiny C — refaça o OAuth em /auth/c/start"}
+
+    headers = {"Authorization": f"Bearer {token}"}
+    results = []
+
+    async with httpx.AsyncClient(timeout=30.0) as http_client:
+        for venda_id in [i.strip() for i in ids.split(",") if i.strip()]:
+            url = f"https://api.tiny.com.br/public-api/v3/pedidos/{venda_id}"
+            response = await http_client.get(url, headers=headers)
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            results.append({
+                "venda_id": venda_id,
+                "status_code": response.status_code,
+                "data": body
+            })
+
+    return {"ok": True, "total": len(results), "results": results}
+
+
 @app.get("/admin/products_map")
 async def admin_products_map():
     from app.db import get_products_map_list

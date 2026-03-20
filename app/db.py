@@ -170,7 +170,7 @@ async def init_db():
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS public.products_map (
                     id_a INTEGER PRIMARY KEY,
-                    id_b INTEGER,
+                    id_c INTEGER,
                     sku TEXT,
                     descricao TEXT,
                     situacao TEXT,
@@ -734,9 +734,9 @@ async def load_products_map() -> dict[int, int]:
     p = await get_pool()
     async with p.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT id_a, id_b FROM public.products_map WHERE id_b IS NOT NULL
+            SELECT id_a, id_c FROM public.products_map WHERE id_c IS NOT NULL
         """)
-        return {row['id_a']: row['id_b'] for row in rows}
+        return {row['id_a']: row['id_c'] for row in rows}
 
 
 async def get_products_map_list() -> list[dict]:
@@ -744,7 +744,7 @@ async def get_products_map_list() -> list[dict]:
     p = await get_pool()
     async with p.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT id_a, id_b, sku, descricao, situacao, ativo, updated_at
+            SELECT id_a, id_c, sku, descricao, situacao, ativo, updated_at
             FROM public.products_map
             ORDER BY id_a
         """)

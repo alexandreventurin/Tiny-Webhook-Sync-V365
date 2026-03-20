@@ -463,7 +463,7 @@ async def admin_tiny_a_produtos():
                 "descricao": p.get("descricao") or p.get("nome") or "",
                 "situacao": situacao,
                 "ativo": ativo,
-                "id_b": PRODUTO_ID_MAP.get(pid),
+                "id_c": PRODUTO_ID_MAP.get(pid),
                 "mapeado": pid in PRODUTO_ID_MAP
             })
         ativos = [r for r in result if r["ativo"]]
@@ -517,7 +517,7 @@ async def admin_products_map():
     
     try:
         products = await get_products_map_list()
-        mapeados = [p for p in products if p.get("id_b")]
+        mapeados = [p for p in products if p.get("id_c")]
         ativos = [p for p in products if p.get("ativo")]
         return {
             "ok": True,

@@ -174,7 +174,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
         <select class="filter-select" id="jobsType" onchange="loadJobs()">
           <option value="">Tipo: Todos</option>
           <option value="fetch_order_a">fetch_order_a</option>
-          <option value="create_order_b">create_order_b</option>
+          <option value="create_order_c">create_order_c</option>
           <option value="sync_status">sync_status</option>
           <option value="sync_nf_link">sync_nf_link</option>
           <option value="noop">noop</option>
@@ -232,13 +232,13 @@ function statusBadge(status) {
 function actionBadge(action_result) {
   if (!action_result) return '';
   if (action_result === 'echo') return '<span class="ev-action act-echo">Eco</span>';
-  if (action_result === 'noop:no_orders_map') return '<span class="ev-action act-noop" title="Pedido sem mapeamento A\u2194B">Sem par</span>';
+  if (action_result === 'noop:no_orders_map') return '<span class="ev-action act-noop" title="Pedido sem mapeamento A\u2194C">Sem par</span>';
   if (action_result === 'noop') return '<span class="ev-action act-noop">Ignorado</span>';
   if (action_result.startsWith('job:')) {
     const jt = action_result.replace('job:', '');
     const labels = {
       'fetch_order_a': 'Buscar A',
-      'create_order_b': 'Criar B',
+      'create_order_c': 'Criar C',
       'sync_status': 'Sync Status',
       'sync_nf_link': 'Sync NF',
     };
@@ -254,12 +254,12 @@ function previewText(job) {
   if (job.action_preview) {
     let ap = job.action_preview;
     if (typeof ap === 'string') { try { ap = JSON.parse(ap); } catch(e) { return `<span class="job-preview">${escHtml(truncate(ap, 50))}</span>`; } }
-    if (job.job_type === 'noop' && ap.would === 'noop') return '<span class="job-preview" title="Pedido sem mapeamento A\u2194B" style="color:#9ca3af">Sem par</span>';
+    if (job.job_type === 'noop' && ap.would === 'noop') return '<span class="job-preview" title="Pedido sem mapeamento A\u2194C" style="color:#9ca3af">Sem par</span>';
     if (ap.skipped) return `<span class="job-preview" title="${escHtml(ap.reason||'')}">${escHtml(ap.reason||'skipped')}</span>`;
     if (ap.dry_run) return `<span class="job-preview">dry-run</span>`;
     if (ap.done || ap.created) {
       const parts = [];
-      if (ap.venda_b_id) parts.push('B:' + ap.venda_b_id);
+      if (ap.venda_c_id) parts.push('C:' + ap.venda_c_id);
       if (ap.target_venda_id) parts.push(ap.target_source + ':' + ap.target_venda_id);
       return `<span class="job-preview" style="color:#065f46">${parts.join(' ') || 'ok'}</span>`;
     }

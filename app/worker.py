@@ -43,11 +43,37 @@ logger = logging.getLogger(__name__)
 
 WORKER_BUILD = "2026-03-19-001"
 
+_rate_limit_cooldown_until: dict[str, float] = {}
+API_THROTTLE_SECONDS = 1.0
+
+class RateLimitError(Exception):
+    def __init__(self, account: str, status_code: int, retry_after: int = 60):
+        self.account = account
+        self.status_code = status_code
+        self.retry_after = retry_after
+        super().__init__(f"Rate limited on account {account} (HTTP {status_code}), retry after {retry_after}s")
+
 async def call_tiny(account: str, client: TinyClient, method: str, *args, **kwargs):
-    """Call a TinyClient method with automatic 401 retry (force-refresh + retry once)."""
+    """Call a TinyClient method with automatic 401 retry, rate limit detection, and throttle."""
+    import time
+    now = time.time()
+    cooldown = _rate_limit_cooldown_until.get(account, 0)
+    if now < cooldown:
+        wait = cooldown - now
+        logger.info(f"Rate limit cooldown for {account}: waiting {wait:.0f}s")
+        raise RateLimitError(account, 429, int(wait))
+
+    await asyncio.sleep(API_THROTTLE_SECONDS)
+
     try:
-        return await getattr(client, method)(*args, **kwargs)
+        result = await getattr(client, method)(*args, **kwargs)
+        return result
     except TinyApiError as e:
+        if e.status_code in (429, 403):
+            retry_after = 60
+            _rate_limit_cooldown_until[account] = time.time() + retry_after
+            logger.warning(f"Rate limit hit on {method} for account {account} (HTTP {e.status_code}), cooldown {retry_after}s")
+            raise RateLimitError(account, e.status_code, retry_after)
         if e.status_code != 401:
             raise
         logger.warning(f"Got 401 on {method} for account {account}, force-refreshing token...")
@@ -909,6 +935,12 @@ async def process_job(job: dict) -> None:
             await update_job_done(job_id, action_preview)
             logger.warning(f"Job {job_id} completed with unknown job_type: {job_type}")
     
+    except RateLimitError as e:
+        delay_minutes = max(1, e.retry_after // 60)
+        logger.warning(f"Job {job_id} rate limited, rescheduling in {delay_minutes}min")
+        safe_attempts = max(0, attempts - 1)
+        await reschedule_job_with_backoff(job_id, safe_attempts, delay_minutes, str(e))
+
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Job {job_id} failed: {error_msg}")
@@ -1011,12 +1043,22 @@ async def worker_loop():
     await maybe_refresh_tokens()
     
     while worker_running:
-        try:
-            processed = await run_worker_once(limit=25)
-            if processed > 0:
-                logger.info(f"Worker processed {processed} jobs")
-        except Exception as e:
-            logger.error(f"Worker error: {e}")
+        import time as _time
+        max_cooldown = 0
+        for acct, until in _rate_limit_cooldown_until.items():
+            remaining = until - _time.time()
+            if remaining > 0:
+                max_cooldown = max(max_cooldown, remaining)
+        if max_cooldown > 0:
+            logger.info(f"Worker pausing {max_cooldown:.0f}s for rate limit cooldown")
+            await asyncio.sleep(min(max_cooldown, 30))
+        else:
+            try:
+                processed = await run_worker_once(limit=10)
+                if processed > 0:
+                    logger.info(f"Worker processed {processed} jobs")
+            except Exception as e:
+                logger.error(f"Worker error: {e}")
         
         now = datetime.now(timezone.utc)
         if _last_token_check is None or (now - _last_token_check).total_seconds() > TOKEN_CHECK_INTERVAL_SECONDS:

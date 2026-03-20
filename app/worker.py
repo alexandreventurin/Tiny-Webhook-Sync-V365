@@ -278,7 +278,7 @@ async def process_job(job: dict) -> None:
     try:
         if job_type == 'create_order_c':
             if not await get_feature_flag("replicate_orders"):
-                action_preview = {"would": "create_order_in_B", "skipped": True, "reason": "replicate_orders flag disabled"}
+                action_preview = {"would": "create_order_in_C", "skipped": True, "reason": "replicate_orders flag disabled"}
                 await update_job_done(job_id, action_preview)
                 logger.info(f"Job {job_id} skipped: replicate_orders flag disabled")
                 return
@@ -290,10 +290,10 @@ async def process_job(job: dict) -> None:
             
             max_orders = int(os.getenv("MAX_ORDERS_TO_REPLICATE", "0"))
             if max_orders > 0:
-                current_count = await count_orders_replicated_to_b()
+                current_count = await count_orders_replicated_to_c()
                 if current_count >= max_orders:
                     action_preview = {
-                        "would": "create_order_in_B",
+                        "would": "create_order_in_C",
                         "skipped": True,
                         "reason": f"MAX_ORDERS_TO_REPLICATE limit reached ({current_count}/{max_orders})",
                         "venda_a_id": venda_id
@@ -321,7 +321,7 @@ async def process_job(job: dict) -> None:
             deposito_nome = deposito.get('nome', '')
             if deposito_id != DROPSHIPPING_DEPOSIT_ID:
                 action_preview = {
-                    "would": "create_order_in_B",
+                    "would": "create_order_in_C",
                     "skipped": True,
                     "reason": "deposit_not_allowed",
                     "venda_a_id": venda_id,
@@ -351,7 +351,7 @@ async def process_job(job: dict) -> None:
             if not EXECUTE_TINY_C:
                 await upsert_orders_map(external_key=external_key, venda_a_id=str(venda_id))
                 action_preview = {
-                    "would": "create_order_in_B",
+                    "would": "create_order_in_C",
                     "situacao_target": "em_aberto",
                     "venda_a_id": venda_id,
                     "external_key": external_key,
@@ -524,7 +524,7 @@ async def process_job(job: dict) -> None:
                     logger.info(f"Job {job_id}: tag failed, created add_tag_c job for order {venda_c_id}")
             
             action_preview = {
-                "would": "create_order_in_B",
+                "would": "create_order_in_C",
                 "situacao_target": "em_aberto",
                 "venda_a_id": venda_id,
                 "venda_c_id": venda_c_id,

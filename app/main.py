@@ -53,10 +53,14 @@ async def root():
 async def process_webhook(request: Request, source: str, topic: str) -> JSONResponse:
     logger = logging.getLogger(__name__)
     raw_body = await request.body()
+    if not raw_body:
+        logger.info(f"process_webhook [{source}/{topic}] empty body (ping from Tiny), ignoring")
+        return JSONResponse(content={"ok": True, "status": "ignored", "reason": "empty_body"})
+
     try:
         payload = json.loads(raw_body)
     except Exception:
-        logger.error(f"process_webhook [{source}/{topic}] invalid JSON body: {raw_body[:500]}")
+        logger.warning(f"process_webhook [{source}/{topic}] invalid JSON body: {raw_body[:500]}")
         return JSONResponse(content={"ok": True, "status": "ignored", "reason": "invalid_json"})
 
     try:

@@ -830,7 +830,7 @@ async def admin_import_start(
     data_fim: str | None = None,
     dias: int | None = None,
     direction: str = "desc",
-    limit_pages: int | None = None
+    limit_orders: int | None = None
 ):
     from app.db import has_running_import
     from app.backfill import start_import, compute_data_fim
@@ -843,7 +843,7 @@ async def admin_import_start(
     elif not data_fim:
         data_fim = "2026-03-19"
 
-    run_id = await start_import(data_inicio, data_fim, direction, limit_pages)
+    run_id = await start_import(data_inicio, data_fim, direction, limit_orders)
     return {"ok": True, "run_id": run_id, "data_inicio": data_inicio, "data_fim": data_fim}
 
 

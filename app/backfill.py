@@ -31,8 +31,8 @@ def compute_data_fim(data_inicio: str, dias: int) -> str:
     return dt_fim.strftime("%Y-%m-%d")
 
 
-async def run_import(run_id: int, data_inicio: str, data_fim: str, direction: str, limit_pages: int | None):
-    logger.info(f"Import run {run_id} started: {data_inicio} -> {data_fim}, dir={direction}, limit={limit_pages}")
+async def run_import(run_id: int, data_inicio: str, data_fim: str, direction: str, limit_orders: int | None):
+    logger.info(f"Import run {run_id} started: {data_inicio} -> {data_fim}, dir={direction}, limit_orders={limit_orders}")
 
     pages_fetched = 0
     orders_found = 0
@@ -51,8 +51,8 @@ async def run_import(run_id: int, data_inicio: str, data_fim: str, direction: st
         pagina = 1
 
         while True:
-            if limit_pages and pages_fetched >= limit_pages:
-                logger.info(f"Import run {run_id}: reached page limit ({limit_pages})")
+            if limit_orders and jobs_created >= limit_orders:
+                logger.info(f"Import run {run_id}: reached order limit ({limit_orders})")
                 break
 
             sort_param = "data-desc" if direction == "desc" else "data-asc"
@@ -129,6 +129,9 @@ async def run_import(run_id: int, data_inicio: str, data_fim: str, direction: st
                 jobs_created += 1
                 await insert_import_run_item(run_id, order_id, numero, data_pedido, status_raw, "job_created")
 
+                if limit_orders and jobs_created >= limit_orders:
+                    break
+
             await update_import_run_progress(run_id, pages_fetched, orders_found, jobs_created, orders_skipped, orders_ignored)
 
             if len(itens) < 100:
@@ -152,9 +155,9 @@ async def run_import(run_id: int, data_inicio: str, data_fim: str, direction: st
         _running_tasks.pop(run_id, None)
 
 
-async def start_import(data_inicio: str, data_fim: str, direction: str = "desc", limit_pages: int | None = None) -> int:
-    run_id = await create_import_run(data_inicio, data_fim, direction, limit_pages)
-    task = asyncio.create_task(run_import(run_id, data_inicio, data_fim, direction, limit_pages))
+async def start_import(data_inicio: str, data_fim: str, direction: str = "desc", limit_orders: int | None = None) -> int:
+    run_id = await create_import_run(data_inicio, data_fim, direction, limit_orders)
+    task = asyncio.create_task(run_import(run_id, data_inicio, data_fim, direction, limit_orders))
     _running_tasks[run_id] = task
     return run_id
 

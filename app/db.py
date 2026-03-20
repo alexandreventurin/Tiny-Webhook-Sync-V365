@@ -1004,8 +1004,12 @@ async def get_import_runs_list() -> list:
 async def check_order_exists_in_map(venda_a_id: str) -> bool:
     p = await get_pool()
     async with p.acquire() as conn:
+        try:
+            venda_a_id_int = int(venda_a_id)
+        except (ValueError, TypeError):
+            return False
         row = await conn.fetchval(
-            "SELECT 1 FROM public.orders_map WHERE venda_a_id = $1", venda_a_id
+            "SELECT 1 FROM public.orders_map WHERE venda_a_id = $1", venda_a_id_int
         )
         return row is not None
 

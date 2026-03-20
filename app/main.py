@@ -877,10 +877,11 @@ async def admin_import_detail(run_id: int, items_limit: int = 200, items_offset:
 
 @app.get("/admin/import")
 async def admin_import_list(limit: int = 5, offset: int = 0):
-    from app.db import get_import_runs_list
+    from app.db import get_import_runs_list, count_import_run_created_in_c
 
     runs, total = await get_import_runs_list(limit=limit, offset=offset)
     for run in runs:
+        run["created_in_c"] = await count_import_run_created_in_c(run["id"])
         for key in ['started_at', 'finished_at', 'created_at']:
             if run.get(key):
                 run[key] = str(run[key])

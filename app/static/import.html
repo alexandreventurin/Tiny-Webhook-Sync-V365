@@ -158,7 +158,7 @@ async function loadRuns() {
       document.getElementById('runsPagination').innerHTML = '';
       return;
     }
-    let html = '<table><thead><tr><th>#</th><th>Status</th><th>Período</th><th>Encontrados</th><th>Jobs</th><th>Já Replic.</th><th>Ignorados</th><th>Iniciado</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>#</th><th>Status</th><th>Período</th><th>Encontrados</th><th>Jobs</th><th style="color:#38bdf8">Criados C</th><th>Já Replic.</th><th>Ignorados</th><th>Iniciado</th></tr></thead><tbody>';
     for (const r of runs) {
       const statusClass = `status-${r.status}`;
       html += `<tr class="run-row" onclick="showDetail(${r.id})">
@@ -167,6 +167,7 @@ async function loadRuns() {
         <td>${r.data_inicio} a ${r.data_fim}</td>
         <td>${r.orders_found || 0}</td>
         <td>${r.jobs_created || 0}</td>
+        <td style="color:#38bdf8;font-weight:600">${r.created_in_c || 0}</td>
         <td>${r.orders_skipped || 0}</td>
         <td>${r.orders_ignored || 0}</td>
         <td>${formatDate(r.started_at)}</td>

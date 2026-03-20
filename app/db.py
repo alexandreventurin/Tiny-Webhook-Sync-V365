@@ -988,6 +988,39 @@ async def count_import_run_created_in_c(run_id: int) -> int:
         return count or 0
 
 
+async def count_requeueable_import_jobs(run_id: int) -> int:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        count = await conn.fetchval("""
+            SELECT COUNT(*) FROM public.import_run_items iri
+            JOIN public.jobs j ON j.dedupe_key = 'A:vendas:' || iri.venda_a_id || ':create_order_c'
+              AND j.job_type = 'create_order_c'
+            WHERE iri.run_id = $1
+              AND iri.action = 'job_created'
+              AND j.status = 'done'
+              AND (j.action_preview::text LIKE '%flag disabled%' OR j.action_preview IS NULL)
+        """, run_id)
+        return count or 0
+
+
+async def requeue_import_run_jobs(run_id: int) -> int:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE public.jobs j
+            SET status = 'queued', action_preview = NULL, attempts = 0
+            FROM public.import_run_items iri
+            WHERE iri.run_id = $1
+              AND iri.action = 'job_created'
+              AND j.dedupe_key = 'A:vendas:' || iri.venda_a_id || ':create_order_c'
+              AND j.job_type = 'create_order_c'
+              AND j.status = 'done'
+              AND (j.action_preview::text LIKE '%flag disabled%' OR j.action_preview IS NULL)
+        """, run_id)
+        count = int(result.split()[-1]) if result else 0
+        return count
+
+
 async def get_import_run_items(run_id: int, limit: int = 200, offset: int = 0) -> list:
     p = await get_pool()
     async with p.acquire() as conn:

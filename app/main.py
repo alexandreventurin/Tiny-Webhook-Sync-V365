@@ -849,7 +849,7 @@ async def admin_import_start(
 
 @app.get("/admin/import/{run_id}")
 async def admin_import_detail(run_id: int, items_limit: int = 200, items_offset: int = 0):
-    from app.db import get_import_run, get_import_run_items, count_import_run_created_in_c
+    from app.db import get_import_run, get_import_run_items, count_import_run_created_in_c, count_requeueable_import_jobs
 
     run = await get_import_run(run_id)
     if not run:
@@ -857,6 +857,7 @@ async def admin_import_detail(run_id: int, items_limit: int = 200, items_offset:
 
     items = await get_import_run_items(run_id, limit=items_limit, offset=items_offset)
     run["created_in_c"] = await count_import_run_created_in_c(run_id)
+    run["requeueable"] = await count_requeueable_import_jobs(run_id)
     for key in ['started_at', 'finished_at', 'created_at']:
         if run.get(key):
             run[key] = str(run[key])
@@ -877,6 +878,13 @@ async def admin_import_list(limit: int = 5, offset: int = 0):
             if run.get(key):
                 run[key] = str(run[key])
     return {"runs": runs, "total": total}
+
+
+@app.post("/admin/import/{run_id}/requeue")
+async def admin_import_requeue(run_id: int):
+    from app.db import requeue_import_run_jobs
+    count = await requeue_import_run_jobs(run_id)
+    return {"ok": True, "requeued": count}
 
 
 @app.post("/admin/import/{run_id}/cancel")

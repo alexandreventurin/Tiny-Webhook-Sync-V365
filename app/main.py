@@ -52,95 +52,105 @@ async def root():
 
 async def process_webhook(request: Request, source: str, topic: str) -> JSONResponse:
     logger = logging.getLogger(__name__)
-    payload = await request.json()
-    
-    dados = payload.get("dados") or {}
-    venda_id_raw = dados.get("id")
-    codigo_situacao_raw = (
-        dados.get("codigoSituacao") or dados.get("codigo_situacao") or 
-        payload.get("codigoSituacao") or payload.get("codigo_situacao")
-    )
-    id_nota_fiscal_raw = dados.get("idNotaFiscal") or dados.get("id_nota_fiscal")
-    
-    venda_id_int = to_int_or_none(venda_id_raw)
-    id_nota_fiscal_int = to_int_or_none(id_nota_fiscal_raw)
-    codigo_situacao_str = str(codigo_situacao_raw).strip().lower() if codigo_situacao_raw not in (None, "") else None
-    id_nota_fiscal_str = str(id_nota_fiscal_int) if id_nota_fiscal_int is not None else None
-    
-    payload_str = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-    
-    event_key = generate_event_key(
-        source=source,
-        topic=topic,
-        venda_id=venda_id_int,
-        codigo_situacao=codigo_situacao_str,
-        id_nota_fiscal=id_nota_fiscal_int,
-        payload=payload
-    )
-    
-    event_id = await insert_event(
-        event_key=event_key,
-        source=source,
-        topic=topic,
-        venda_id=venda_id_int,
-        codigo_situacao=codigo_situacao_str,
-        id_nota_fiscal=id_nota_fiscal_str,
-        payload=payload_str
-    )
-    
-    if source == "B" and topic == "notas" and venda_id_int is None and id_nota_fiscal_int is None:
-        if event_id:
-            await update_event_action_result(event_id, "noop")
-        return JSONResponse(content={"ok": True, "status": "ignored", "reason": "missing_venda_id_and_id_nota_fiscal"})
-    
-    job_type = determine_job_type(source, topic, codigo_situacao_str)
-    
-    if job_type == "noop":
-        if event_id:
-            await update_event_action_result(event_id, "noop")
-        return JSONResponse(content={"ok": True, "status": "ignored", "reason": f"noop for {source}/{topic}/{codigo_situacao_str}"})
-    
-    if job_type == "sync_status" and venda_id_int and codigo_situacao_str:
-        is_echo = await check_is_echo(source, str(venda_id_int), codigo_situacao_str)
-        if is_echo:
-            if event_id:
-                await update_event_action_result(event_id, "echo")
-            logger.info(f"Echo detected: {source} venda {venda_id_int} {codigo_situacao_str} (ignored)")
-            return JSONResponse(content={"ok": True, "status": "ignored", "reason": "echo"})
+    raw_body = await request.body()
+    try:
+        payload = json.loads(raw_body)
+    except Exception:
+        logger.error(f"process_webhook [{source}/{topic}] invalid JSON body: {raw_body[:500]}")
+        return JSONResponse(content={"ok": True, "status": "ignored", "reason": "invalid_json"})
 
-        venda_str = str(venda_id_int)
-        if source == "A":
-            mapping = await get_order_mapping_by_a(venda_str)
-        else:
-            mapping = await get_order_mapping_by_c(venda_str)
-        if not mapping:
-            noop_payload = {
-                "source": source, "topic": topic,
-                "venda_id": venda_str, "codigo_situacao": codigo_situacao_str
-            }
-            dedupe_key = generate_dedupe_key(source, topic, venda_id_int, "noop", codigo_situacao=codigo_situacao_str)
-            await insert_job(job_type="noop", dedupe_key=dedupe_key, event_id=None, payload=noop_payload)
+    try:
+        dados = payload.get("dados") or {}
+        venda_id_raw = dados.get("id")
+        codigo_situacao_raw = (
+            dados.get("codigoSituacao") or dados.get("codigo_situacao") or 
+            payload.get("codigoSituacao") or payload.get("codigo_situacao")
+        )
+        id_nota_fiscal_raw = dados.get("idNotaFiscal") or dados.get("id_nota_fiscal")
+        
+        venda_id_int = to_int_or_none(venda_id_raw)
+        id_nota_fiscal_int = to_int_or_none(id_nota_fiscal_raw)
+        codigo_situacao_str = str(codigo_situacao_raw).strip().lower() if codigo_situacao_raw not in (None, "") else None
+        id_nota_fiscal_str = str(id_nota_fiscal_int) if id_nota_fiscal_int is not None else None
+        
+        payload_str = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        
+        event_key = generate_event_key(
+            source=source,
+            topic=topic,
+            venda_id=venda_id_int,
+            codigo_situacao=codigo_situacao_str,
+            id_nota_fiscal=id_nota_fiscal_int,
+            payload=payload
+        )
+        
+        event_id = await insert_event(
+            event_key=event_key,
+            source=source,
+            topic=topic,
+            venda_id=venda_id_int,
+            codigo_situacao=codigo_situacao_str,
+            id_nota_fiscal=id_nota_fiscal_str,
+            payload=payload_str
+        )
+        
+        if source == "B" and topic == "notas" and venda_id_int is None and id_nota_fiscal_int is None:
             if event_id:
-                await update_event_action_result(event_id, "noop:no_orders_map")
-            logger.info(f"sync_status skipped: no orders_map for {source} venda {venda_id_int}")
-            return JSONResponse(content={"ok": True, "status": "ignored", "reason": "no_orders_map"})
-    
-    dedupe_key = generate_dedupe_key(source, topic, venda_id_int, job_type, codigo_situacao=codigo_situacao_str)
-    
-    job_payload = {
-        "source": source,
-        "topic": topic,
-        "venda_id": str(venda_id_int) if venda_id_int is not None else None,
-        "codigo_situacao": codigo_situacao_str,
-        "id_nota_fiscal": id_nota_fiscal_str
-    }
-    
-    await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload, delay_minutes=0)
-    
-    if event_id:
-        await update_event_action_result(event_id, f"job:{job_type}")
-    
-    return JSONResponse(content={"ok": True})
+                await update_event_action_result(event_id, "noop")
+            return JSONResponse(content={"ok": True, "status": "ignored", "reason": "missing_venda_id_and_id_nota_fiscal"})
+        
+        job_type = determine_job_type(source, topic, codigo_situacao_str)
+        
+        if job_type == "noop":
+            if event_id:
+                await update_event_action_result(event_id, "noop")
+            return JSONResponse(content={"ok": True, "status": "ignored", "reason": f"noop for {source}/{topic}/{codigo_situacao_str}"})
+        
+        if job_type == "sync_status" and venda_id_int and codigo_situacao_str:
+            is_echo = await check_is_echo(source, str(venda_id_int), codigo_situacao_str)
+            if is_echo:
+                if event_id:
+                    await update_event_action_result(event_id, "echo")
+                logger.info(f"Echo detected: {source} venda {venda_id_int} {codigo_situacao_str} (ignored)")
+                return JSONResponse(content={"ok": True, "status": "ignored", "reason": "echo"})
+
+            venda_str = str(venda_id_int)
+            if source == "A":
+                mapping = await get_order_mapping_by_a(venda_str)
+            else:
+                mapping = await get_order_mapping_by_c(venda_str)
+            if not mapping:
+                noop_payload = {
+                    "source": source, "topic": topic,
+                    "venda_id": venda_str, "codigo_situacao": codigo_situacao_str
+                }
+                dedupe_key = generate_dedupe_key(source, topic, venda_id_int, "noop", codigo_situacao=codigo_situacao_str)
+                await insert_job(job_type="noop", dedupe_key=dedupe_key, event_id=None, payload=noop_payload)
+                if event_id:
+                    await update_event_action_result(event_id, "noop:no_orders_map")
+                logger.info(f"sync_status skipped: no orders_map for {source} venda {venda_id_int}")
+                return JSONResponse(content={"ok": True, "status": "ignored", "reason": "no_orders_map"})
+        
+        dedupe_key = generate_dedupe_key(source, topic, venda_id_int, job_type, codigo_situacao=codigo_situacao_str)
+        
+        job_payload = {
+            "source": source,
+            "topic": topic,
+            "venda_id": str(venda_id_int) if venda_id_int is not None else None,
+            "codigo_situacao": codigo_situacao_str,
+            "id_nota_fiscal": id_nota_fiscal_str
+        }
+        
+        await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload, delay_minutes=0)
+        
+        if event_id:
+            await update_event_action_result(event_id, f"job:{job_type}")
+        
+        return JSONResponse(content={"ok": True})
+
+    except Exception as exc:
+        logger.error(f"process_webhook [{source}/{topic}] unhandled error: {exc} | payload: {raw_body[:500]}", exc_info=True)
+        return JSONResponse(content={"ok": True, "status": "error_logged"})
 
 
 @app.post("/webhooks/a/vendas", response_model=WebhookResponse)

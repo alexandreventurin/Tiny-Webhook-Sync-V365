@@ -12,6 +12,13 @@ logger = logging.getLogger(__name__)
 
 ELIGIBLE_STATUSES = {"pronto_envio", "enviado", "entregue"}
 
+
+def to_tiny_date(iso_date: str) -> str:
+    parts = iso_date.split("-")
+    if len(parts) == 3 and len(parts[0]) == 4:
+        return f"{parts[2]}/{parts[1]}/{parts[0]}"
+    return iso_date
+
 _running_tasks: dict[int, asyncio.Task] = {}
 
 
@@ -49,11 +56,13 @@ async def run_import(run_id: int, data_inicio: str, data_fim: str, direction: st
                 break
 
             sort_param = "data-desc" if direction == "desc" else "data-asc"
+            data_inicio_fmt = to_tiny_date(data_inicio)
+            data_fim_fmt = to_tiny_date(data_fim)
             try:
                 result = await client_a.list_orders(
                     pagina=pagina,
-                    data_inicial=data_inicio,
-                    data_final=data_fim,
+                    data_inicial=data_inicio_fmt,
+                    data_final=data_fim_fmt,
                     limite=100,
                     sort=sort_param
                 )
@@ -67,8 +76,8 @@ async def run_import(run_id: int, data_inicio: str, data_fim: str, direction: st
                     try:
                         result = await client_a.list_orders(
                             pagina=pagina,
-                            data_inicial=data_inicio,
-                            data_final=data_fim,
+                            data_inicial=data_inicio_fmt,
+                            data_final=data_fim_fmt,
                             limite=100,
                             sort=sort_param
                         )

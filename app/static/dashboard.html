@@ -285,10 +285,17 @@ function toggleJobDetail(row, idx) {
   if (!j) return;
   const parts = [];
   if (j.action_preview) {
-    const ap = typeof j.action_preview === 'string' ? j.action_preview : JSON.stringify(j.action_preview, null, 2);
-    let formatted;
-    try { formatted = JSON.stringify(JSON.parse(ap), null, 2); } catch(e) { formatted = ap; }
-    parts.push('<div class="detail-label">Detalhe</div><pre>' + escHtml(formatted) + '</pre>');
+    let apObj = j.action_preview;
+    if (typeof apObj === 'string') { try { apObj = JSON.parse(apObj); } catch(e) { apObj = null; parts.push('<div class="detail-label">Detalhe</div><pre>' + escHtml(j.action_preview) + '</pre>'); } }
+    if (apObj && typeof apObj === 'object') {
+      let payloadC = apObj.payload_sent_to_c;
+      let summary = Object.assign({}, apObj);
+      delete summary.payload_sent_to_c;
+      parts.push('<div class="detail-label">Detalhe</div><pre>' + escHtml(JSON.stringify(summary, null, 2)) + '</pre>');
+      if (payloadC) {
+        parts.push('<div class="detail-label" style="margin-top:8px;color:#38bdf8">Payload enviado a C</div><pre style="border-left:3px solid #38bdf8;padding-left:10px">' + escHtml(JSON.stringify(payloadC, null, 2)) + '</pre>');
+      }
+    }
   }
   if (j.last_error) {
     parts.push('<div class="detail-label" style="margin-top:8px">Erro</div><pre style="color:#dc2626">' + escHtml(j.last_error) + '</pre>');

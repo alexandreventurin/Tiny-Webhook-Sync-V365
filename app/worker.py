@@ -555,7 +555,8 @@ async def process_job(job: dict) -> None:
                 "tag_added": tag_added,
                 "tag_job_created": tag_job_created if not tag_added else None,
                 "force_status_c": force_status_c if force_status_c else None,
-                "force_status_applied": force_status_applied if force_status_c else None
+                "force_status_applied": force_status_applied if force_status_c else None,
+                "payload_sent_to_c": order_payload_c
             }
             await update_job_done(job_id, action_preview)
             logger.info(f"Job {job_id} completed: created order in C with id {venda_c_id} (envio={forma_envio_src}, frete={forma_frete_src}, tag={tag_added}, force={force_status_applied if force_status_c else 'n/a'})")

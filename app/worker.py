@@ -96,7 +96,8 @@ async def refresh_products_map():
         PRODUTO_ID_MAP = await load_products_map()
         SKU_PRICE_MAP = await load_products_prices()
         _products_map_loaded = True
-        logger.info(f"Products map reloaded: {len(PRODUTO_ID_MAP)} mappings, {len(SKU_PRICE_MAP)} prices: {SKU_PRICE_MAP}")
+        logger.info(f"Products map reloaded: {len(PRODUTO_ID_MAP)} mappings, {len(SKU_PRICE_MAP)} prices")
+        logger.debug(f"SKU_PRICE_MAP: {SKU_PRICE_MAP}")
     except Exception as e:
         logger.error(f"Failed to load products map: {e}")
 

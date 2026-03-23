@@ -193,14 +193,7 @@ async def init_db():
                     WHEN 'Rosto-1t' THEN 12.25
                     WHEN 'Rosto-2o' THEN 12.25
                 END
-                WHERE sku IN ('Rosto-5', 'Rosto-5too', 'Te', 'Pescoco', 'Rosto-1t', 'Rosto-2o') AND (preco IS NULL OR preco != CASE sku
-                    WHEN 'Rosto-5' THEN 19.55
-                    WHEN 'Rosto-5too' THEN 19.55
-                    WHEN 'Te' THEN 18.50
-                    WHEN 'Pescoco' THEN 9.65
-                    WHEN 'Rosto-1t' THEN 12.25
-                    WHEN 'Rosto-2o' THEN 12.25
-                END)
+                WHERE sku IN ('Rosto-5', 'Rosto-5too', 'Te', 'Pescoco', 'Rosto-1t', 'Rosto-2o') AND preco IS NULL
             """)
 
             await conn.execute("""

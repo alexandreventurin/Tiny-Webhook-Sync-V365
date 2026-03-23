@@ -179,6 +179,30 @@ async def init_db():
                 )
             """)
 
+            try:
+                await conn.execute("ALTER TABLE public.products_map ADD COLUMN IF NOT EXISTS preco NUMERIC")
+            except Exception:
+                pass
+
+            await conn.execute("""
+                UPDATE public.products_map SET preco = CASE sku
+                    WHEN 'Rosto-5' THEN 19.55
+                    WHEN 'Rosto-5too' THEN 19.55
+                    WHEN 'Te' THEN 18.50
+                    WHEN 'Pescoco' THEN 9.65
+                    WHEN 'Rosto-1t' THEN 12.25
+                    WHEN 'Rosto-2o' THEN 12.25
+                END
+                WHERE sku IN ('Rosto-5', 'Rosto-5too', 'Te', 'Pescoco', 'Rosto-1t', 'Rosto-2o') AND (preco IS NULL OR preco != CASE sku
+                    WHEN 'Rosto-5' THEN 19.55
+                    WHEN 'Rosto-5too' THEN 19.55
+                    WHEN 'Te' THEN 18.50
+                    WHEN 'Pescoco' THEN 9.65
+                    WHEN 'Rosto-1t' THEN 12.25
+                    WHEN 'Rosto-2o' THEN 12.25
+                END)
+            """)
+
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS public.tiny_tokens (
                     account TEXT PRIMARY KEY,
@@ -772,12 +796,22 @@ async def load_products_map() -> dict[int, int]:
         return {row['id_a']: row['id_c'] for row in rows}
 
 
+async def load_products_prices() -> dict[str, float]:
+    """Carrega preços por SKU da tabela products_map."""
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT sku, preco FROM public.products_map WHERE preco IS NOT NULL AND sku IS NOT NULL
+        """)
+        return {row['sku']: float(row['preco']) for row in rows}
+
+
 async def get_products_map_list() -> list[dict]:
     """Lista todos os produtos da tabela products_map."""
     p = await get_pool()
     async with p.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT id_a, id_c, sku, descricao, situacao, ativo, updated_at
+            SELECT id_a, id_c, sku, descricao, situacao, ativo, preco, updated_at
             FROM public.products_map
             ORDER BY id_a
         """)

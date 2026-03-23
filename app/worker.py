@@ -26,6 +26,7 @@ from app.db import (
     reset_stale_locks,
     count_orders_replicated_to_c,
     load_products_map,
+    load_products_prices,
     get_feature_flag,
     update_orders_map_sync
 )
@@ -85,30 +86,19 @@ async def call_tiny(account: str, client: TinyClient, method: str, *args, **kwar
 
 
 PRODUTO_ID_MAP: dict[int, int] = {}
+SKU_PRICE_MAP: dict[str, float] = {}
 _products_map_loaded = False
 
 async def refresh_products_map():
-    """Recarrega o mapeamento de produtos do banco de dados."""
-    global PRODUTO_ID_MAP, _products_map_loaded
+    """Recarrega o mapeamento de produtos e preços do banco de dados."""
+    global PRODUTO_ID_MAP, SKU_PRICE_MAP, _products_map_loaded
     try:
         PRODUTO_ID_MAP = await load_products_map()
+        SKU_PRICE_MAP = await load_products_prices()
         _products_map_loaded = True
-        logger.info(f"Products map reloaded: {len(PRODUTO_ID_MAP)} mappings")
+        logger.info(f"Products map reloaded: {len(PRODUTO_ID_MAP)} mappings, {len(SKU_PRICE_MAP)} prices: {SKU_PRICE_MAP}")
     except Exception as e:
         logger.error(f"Failed to load products map: {e}")
-
-SKU_PRICE = {
-    "Rosto-5": 24.45,
-    "Te": 21.20,
-    "Pescoco": 9.65,
-    "Rosto-1t": 12.25,
-    "Rosto-2o": 12.25,
-    "Rosto-5too": 24.45,
-}
-
-SKU_ALIAS = {
-    "Rosto-5": "Rosto-5too",
-}
 
 DROPSHIPPING_DEPOSIT_ID_A = 336403602  # ID do depósito "Dropshipping (Muy Bela)" em Tiny A (Rejuderme)
 DROPSHIPPING_DEPOSIT_ID_C = 888616671  # ID do depósito equivalente em V365 (Tiny C)
@@ -175,15 +165,9 @@ FORMA_ENVIO_MAP = {
 }
 
 
-def map_sku(codigo: str | None) -> str | None:
-    if not codigo:
-        return None
-    return SKU_ALIAS.get(codigo, codigo)
-
-
 def price_for(codigo: str | None, fallback: float) -> float:
-    if codigo and codigo in SKU_PRICE:
-        return float(SKU_PRICE[codigo])
+    if codigo and codigo in SKU_PRICE_MAP:
+        return float(SKU_PRICE_MAP[codigo])
     return float(fallback or 0)
 
 
@@ -230,8 +214,7 @@ async def build_itens_dest_v3(itens_src: list, retry_on_miss: bool = True) -> li
         sku = produto.get("sku") or ""
         quantidade = src.get("quantidade") or 1
         valor_unitario = src.get("valorUnitario") or 0
-        codigo_destino = map_sku(sku)
-        valor_final = price_for(codigo_destino, valor_unitario)
+        valor_final = price_for(sku, valor_unitario)
         out.append({
             "produto": {"id": produto_id_destino},
             "quantidade": quantidade,

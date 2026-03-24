@@ -536,6 +536,22 @@ async def process_job(job: dict) -> None:
                 if tag_job_created:
                     logger.info(f"Job {job_id}: tag failed, created add_tag_c job for order {venda_c_id}")
 
+            tag_a_added = False
+            tag_a_job_created = False
+            try:
+                token_a = await ensure_access_token("A")
+                if token_a:
+                    client_a = TinyClient(token_a)
+                    tag_a_added = await call_tiny("A", client_a, "add_order_tags", str(venda_id), ["V365"])
+            except Exception as e:
+                logger.warning(f"Job {job_id}: failed to add tag V365 to A order {venda_id}: {e}")
+            if not tag_a_added:
+                tag_a_dedupe = f"A:tag:{venda_id}:add_tag_a"
+                tag_a_payload = {"venda_a_id": str(venda_id), "tag": "V365"}
+                tag_a_job_created = await insert_job(job_type="add_tag_a", dedupe_key=tag_a_dedupe, event_id=None, payload=tag_a_payload, delay_minutes=1)
+                if tag_a_job_created:
+                    logger.info(f"Job {job_id}: tag A failed, created add_tag_a job for order {venda_id}")
+
             force_status_c = payload.get('force_status_c')
             force_status_applied = False
             if force_status_c and venda_c_id:
@@ -564,6 +580,8 @@ async def process_job(job: dict) -> None:
                 "created": True,
                 "tag_added": tag_added,
                 "tag_job_created": tag_job_created if not tag_added else None,
+                "tag_a_added": tag_a_added,
+                "tag_a_job_created": tag_a_job_created if not tag_a_added else None,
                 "force_status_c": force_status_c if force_status_c else None,
                 "force_status_applied": force_status_applied if force_status_c else None,
                 "payload_sent_to_c": order_payload_c
@@ -897,6 +915,48 @@ async def process_job(job: dict) -> None:
             else:
                 await update_job_failed(job_id, f"add_tag_b failed after {attempts} attempts: {tag_error}", attempts)
                 logger.warning(f"Job {job_id} add_tag_c gave up after {attempts} attempts for order {tag_venda_c_id}")
+
+        elif job_type == 'add_tag_a':
+            TAG_BACKOFF_MINUTES = [1, 3, 5]
+            TAG_MAX_RETRIES = len(TAG_BACKOFF_MINUTES)
+
+            tag_venda_a_id = payload.get('venda_a_id')
+            tag_text = payload.get('tag', 'V365')
+
+            if not tag_venda_a_id:
+                await update_job_failed(job_id, "missing venda_a_id", attempts)
+                return
+
+            token_a = await ensure_access_token("A")
+            if not token_a:
+                if attempts <= TAG_MAX_RETRIES:
+                    delay = TAG_BACKOFF_MINUTES[attempts - 1]
+                    await reschedule_job_with_backoff(job_id, attempts, delay, "No valid OAuth token for A")
+                    logger.info(f"Job {job_id} add_tag_a rescheduled (attempt {attempts}, retry in {delay}min)")
+                else:
+                    await update_job_failed(job_id, "No valid OAuth token for A after retries", attempts)
+                return
+
+            client_a = TinyClient(token_a)
+            tag_ok = False
+            tag_error = ""
+            try:
+                tag_ok = await call_tiny("A", client_a, "add_order_tags", tag_venda_a_id, [tag_text])
+            except Exception as e:
+                tag_error = str(e)
+                logger.warning(f"Job {job_id} add_tag_a failed: {e}")
+
+            if tag_ok:
+                action_preview = {"would": "add_tag_a", "venda_a_id": tag_venda_a_id, "tag": tag_text, "tag_added": True, "attempts": attempts}
+                await update_job_done(job_id, action_preview)
+                logger.info(f"Job {job_id} completed: add_tag_a for order {tag_venda_a_id} (attempt {attempts})")
+            elif attempts <= TAG_MAX_RETRIES:
+                delay = TAG_BACKOFF_MINUTES[attempts - 1]
+                await reschedule_job_with_backoff(job_id, attempts, delay, tag_error or "tag request failed")
+                logger.info(f"Job {job_id} add_tag_a rescheduled (attempt {attempts}/{TAG_MAX_RETRIES}, retry in {delay}min)")
+            else:
+                await update_job_failed(job_id, f"add_tag_a failed after {attempts} attempts: {tag_error}", attempts)
+                logger.warning(f"Job {job_id} add_tag_a gave up after {attempts} attempts for order {tag_venda_a_id}")
 
         elif job_type == 'noop':
             action_preview = {

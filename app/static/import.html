@@ -126,7 +126,7 @@ td { padding: 8px; border-bottom: 1px solid #1e293b; }
     <div id="detailStats"></div>
     <div style="margin-top:14px">
       <table>
-        <thead><tr><th>Pedido A</th><th>Número</th><th>Data</th><th>Status A</th><th>Ação</th></tr></thead>
+        <thead><tr><th>Pedido A</th><th>Número</th><th>Data</th><th>Status A</th><th>Ação</th><th>Motivo</th></tr></thead>
         <tbody id="detailItems"></tbody>
       </table>
     </div>
@@ -270,15 +270,18 @@ async function refreshDetail() {
     for (const it of items) {
       const actionClass = it.action === 'job_created' ? 'action-created' : it.action === 'already_imported' ? 'action-skipped' : 'action-ignored';
       const actionLabel = it.action === 'job_created' ? 'Job Criado' : it.action === 'already_imported' ? 'Já Replicado' : 'Ignorado';
+      const motivo = it.motivo || (it.action === 'already_imported' ? 'Já existe no mapa' : '-');
+      const motivoStyle = it.action === 'ignored' ? 'color:#fb923c' : 'color:#64748b';
       tbody += `<tr>
         <td>${it.venda_a_id}</td>
         <td>${it.numero_pedido || '-'}</td>
         <td>${it.data_pedido || '-'}</td>
         <td>${it.status_em_a || '-'}</td>
         <td class="${actionClass}">${actionLabel}</td>
+        <td style="${motivoStyle};font-size:0.8rem">${motivo}</td>
       </tr>`;
     }
-    document.getElementById('detailItems').innerHTML = tbody || '<tr><td colspan="5" style="text-align:center;color:#64748b">Nenhum item ainda</td></tr>';
+    document.getElementById('detailItems').innerHTML = tbody || '<tr><td colspan="6" style="text-align:center;color:#64748b">Nenhum item ainda</td></tr>';
 
     if (!isRunning) {
       stopPoll();

@@ -259,6 +259,11 @@ async def init_db():
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+
+            try:
+                await conn.execute("ALTER TABLE public.import_run_items ADD COLUMN IF NOT EXISTS motivo TEXT")
+            except Exception:
+                pass
             
         logger.info("Database connected and tables created")
     except Exception as e:
@@ -986,13 +991,14 @@ async def finish_import_run(run_id: int, status: str, error: str | None = None):
 
 
 async def insert_import_run_item(run_id: int, venda_a_id: str, numero_pedido: str | None,
-                                  data_pedido: str | None, status_em_a: str | None, action: str):
+                                  data_pedido: str | None, status_em_a: str | None, action: str,
+                                  motivo: str | None = None):
     p = await get_pool()
     async with p.acquire() as conn:
         await conn.execute("""
-            INSERT INTO public.import_run_items (run_id, venda_a_id, numero_pedido, data_pedido, status_em_a, action)
-            VALUES ($1, $2, $3, $4, $5, $6)
-        """, run_id, venda_a_id, numero_pedido, data_pedido, status_em_a, action)
+            INSERT INTO public.import_run_items (run_id, venda_a_id, numero_pedido, data_pedido, status_em_a, action, motivo)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+        """, run_id, venda_a_id, numero_pedido, data_pedido, status_em_a, action, motivo)
 
 
 async def get_import_run(run_id: int) -> dict | None:
@@ -1052,7 +1058,7 @@ async def get_import_run_items(run_id: int, limit: int = 200, offset: int = 0) -
     p = await get_pool()
     async with p.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT venda_a_id, numero_pedido, data_pedido, status_em_a, action, created_at
+            SELECT venda_a_id, numero_pedido, data_pedido, status_em_a, action, motivo, created_at
             FROM public.import_run_items
             WHERE run_id = $1
             ORDER BY id DESC

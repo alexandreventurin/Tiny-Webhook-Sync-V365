@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 from datetime import datetime, timedelta
 from app.db import (
     create_import_run, update_import_run_progress, finish_import_run,
@@ -39,6 +40,8 @@ async def run_import(run_id: int, data_inicio: str, data_fim: str, direction: st
     jobs_created = 0
     orders_skipped = 0
     orders_ignored = 0
+    seen_ids: set[str] = set()
+    total_pages = None
 
     try:
         token_a = await ensure_access_token("A")
@@ -53,6 +56,10 @@ async def run_import(run_id: int, data_inicio: str, data_fim: str, direction: st
         while True:
             if limit_orders and jobs_created >= limit_orders:
                 logger.info(f"Import run {run_id}: reached order limit ({limit_orders})")
+                break
+
+            if total_pages is not None and pagina > total_pages:
+                logger.info(f"Import run {run_id}: all {total_pages} pages fetched")
                 break
 
             sort_param = "data-desc" if direction == "desc" else "data-asc"
@@ -91,6 +98,29 @@ async def run_import(run_id: int, data_inicio: str, data_fim: str, direction: st
                 logger.info(f"Import run {run_id}: no more items at page {pagina}")
                 break
 
+            if total_pages is None:
+                paginacao = result.get("paginacao", {})
+                api_total = paginacao.get("total", 0)
+                api_limit = paginacao.get("limit", 100) or 100
+                if api_total > 0:
+                    total_pages = math.ceil(api_total / api_limit)
+                    logger.info(f"Import run {run_id}: API reports {api_total} total items, {total_pages} pages")
+                else:
+                    total_pages = 1
+                    logger.info(f"Import run {run_id}: API total=0 or missing, assuming single page")
+
+            page_ids = set()
+            for order in itens:
+                oid = str(order.get("id", ""))
+                if oid:
+                    page_ids.add(oid)
+
+            new_ids_on_page = page_ids - seen_ids
+            if page_ids and not new_ids_on_page:
+                logger.warning(f"Import run {run_id}: page {pagina} returned only already-seen IDs, stopping (loop detected)")
+                break
+
+            seen_ids.update(page_ids)
             pages_fetched += 1
 
             for order in itens:
@@ -102,7 +132,8 @@ async def run_import(run_id: int, data_inicio: str, data_fim: str, direction: st
 
                 if status_raw not in ELIGIBLE_STATUSES:
                     orders_ignored += 1
-                    await insert_import_run_item(run_id, order_id, numero, data_pedido, status_raw, "ignored")
+                    motivo = f"status: {status_raw}" if status_raw else "status não identificado"
+                    await insert_import_run_item(run_id, order_id, numero, data_pedido, status_raw, "ignored", motivo)
                     continue
 
                 already_imported = await check_order_exists_in_map(order_id)
@@ -134,16 +165,12 @@ async def run_import(run_id: int, data_inicio: str, data_fim: str, direction: st
 
             await update_import_run_progress(run_id, pages_fetched, orders_found, jobs_created, orders_skipped, orders_ignored)
 
-            if len(itens) < 100:
-                logger.info(f"Import run {run_id}: last page reached ({len(itens)} items)")
-                break
-
             pagina += 1
             await asyncio.sleep(0.5)
 
         await update_import_run_progress(run_id, pages_fetched, orders_found, jobs_created, orders_skipped, orders_ignored)
         await finish_import_run(run_id, "done")
-        logger.info(f"Import run {run_id} done: {pages_fetched} pages, {orders_found} orders, {jobs_created} jobs, {orders_skipped} skipped, {orders_ignored} ignored")
+        logger.info(f"Import run {run_id} done: {pages_fetched} pages, {orders_found} orders (unique={len(seen_ids)}), {jobs_created} jobs, {orders_skipped} skipped, {orders_ignored} ignored")
 
     except asyncio.CancelledError:
         await finish_import_run(run_id, "cancelled")

@@ -3,8 +3,8 @@ import logging
 import math
 from datetime import datetime, timedelta
 from app.db import (
-    create_import_run, update_import_run_progress, finish_import_run,
-    insert_import_run_item, check_order_exists_in_map, insert_job
+    create_import_run, update_import_run_progress, update_import_run_api_total,
+    finish_import_run, insert_import_run_item, check_order_exists_in_map, insert_job
 )
 from app.tiny_client import TinyClient, TinyApiError
 from app.tiny_oauth import ensure_access_token
@@ -105,6 +105,7 @@ async def run_import(run_id: int, data_inicio: str, data_fim: str, direction: st
                 if api_total > 0:
                     total_pages = math.ceil(api_total / api_limit)
                     logger.info(f"Import run {run_id}: API reports {api_total} total items, {total_pages} pages")
+                    await update_import_run_api_total(run_id, api_total)
                 else:
                     total_pages = 1
                     logger.info(f"Import run {run_id}: API total=0 or missing, assuming single page")

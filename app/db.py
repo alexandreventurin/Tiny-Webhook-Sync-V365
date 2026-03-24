@@ -264,6 +264,11 @@ async def init_db():
                 await conn.execute("ALTER TABLE public.import_run_items ADD COLUMN IF NOT EXISTS motivo TEXT")
             except Exception:
                 pass
+
+            try:
+                await conn.execute("ALTER TABLE public.import_runs ADD COLUMN IF NOT EXISTS api_total INTEGER")
+            except Exception:
+                pass
             
         logger.info("Database connected and tables created")
     except Exception as e:
@@ -980,6 +985,14 @@ async def update_import_run_progress(run_id: int, pages_fetched: int, orders_fou
         """, run_id, pages_fetched, orders_found, jobs_created, orders_skipped, orders_ignored)
 
 
+async def update_import_run_api_total(run_id: int, api_total: int):
+    p = await get_pool()
+    async with p.acquire() as conn:
+        await conn.execute("""
+            UPDATE public.import_runs SET api_total = $2 WHERE id = $1
+        """, run_id, api_total)
+
+
 async def finish_import_run(run_id: int, status: str, error: str | None = None):
     p = await get_pool()
     async with p.acquire() as conn:
@@ -1074,7 +1087,7 @@ async def get_import_runs_list(limit: int = 5, offset: int = 0) -> tuple[list, i
         rows = await conn.fetch("""
             SELECT id, status, data_inicio, data_fim, direction, limit_pages,
                    pages_fetched, orders_found, jobs_created, orders_skipped, orders_ignored,
-                   started_at, finished_at, error, created_at
+                   api_total, started_at, finished_at, error, created_at
             FROM public.import_runs
             ORDER BY id DESC
             LIMIT $1 OFFSET $2

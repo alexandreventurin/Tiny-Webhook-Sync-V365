@@ -317,15 +317,31 @@ async def insert_job(job_type: str, dedupe_key: str, event_id: str | None, paylo
                 result = await conn.execute("""
                     INSERT INTO public.jobs (job_type, dedupe_key, status, payload, run_after)
                     VALUES ($1::text, $2::text, 'queued', $3::jsonb, NOW() + ($4::int || ' minutes')::interval)
-                    ON CONFLICT (dedupe_key) DO UPDATE 
-                    SET payload = COALESCE(NULLIF($3::jsonb, '{}'::jsonb), public.jobs.payload)
+                    ON CONFLICT (dedupe_key) DO UPDATE
+                    SET status = 'queued',
+                        payload = COALESCE(NULLIF($3::jsonb, '{}'::jsonb), public.jobs.payload),
+                        attempts = 0,
+                        last_error = NULL,
+                        run_after = NOW() + ($4::int || ' minutes')::interval,
+                        locked_at = NULL,
+                        locked_by = NULL,
+                        updated_at = NOW()
+                    WHERE public.jobs.status IN ('failed', 'dead')
                 """, job_type, dedupe_key, payload_str, delay_minutes)
             else:
                 result = await conn.execute("""
                     INSERT INTO public.jobs (job_type, dedupe_key, status, payload)
                     VALUES ($1::text, $2::text, 'queued', $3::jsonb)
-                    ON CONFLICT (dedupe_key) DO UPDATE 
-                    SET payload = COALESCE(NULLIF($3::jsonb, '{}'::jsonb), public.jobs.payload)
+                    ON CONFLICT (dedupe_key) DO UPDATE
+                    SET status = 'queued',
+                        payload = COALESCE(NULLIF($3::jsonb, '{}'::jsonb), public.jobs.payload),
+                        attempts = 0,
+                        last_error = NULL,
+                        run_after = NOW(),
+                        locked_at = NULL,
+                        locked_by = NULL,
+                        updated_at = NOW()
+                    WHERE public.jobs.status IN ('failed', 'dead')
                 """, job_type, dedupe_key, payload_str)
             return "INSERT" in result or "UPDATE" in result
         except Exception as e:
@@ -367,28 +383,20 @@ async def reset_stale_locks() -> int:
 
 async def fetch_and_lock_jobs(limit: int = 25) -> list[dict]:
     p = await get_pool()
-    locked_jobs = []
-    
     async with p.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT id, job_type, dedupe_key, payload, attempts
-            FROM public.jobs
-            WHERE status = 'queued' AND (run_after IS NULL OR run_after <= NOW())
-            ORDER BY created_at ASC
-            LIMIT $1
+            UPDATE public.jobs
+            SET status = 'running', locked_at = NOW(), locked_by = 'worker'
+            WHERE id IN (
+                SELECT id FROM public.jobs
+                WHERE status = 'queued' AND (run_after IS NULL OR run_after <= NOW())
+                ORDER BY created_at ASC
+                LIMIT $1
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id, job_type, dedupe_key, payload, attempts
         """, limit)
-        
-        for row in rows:
-            result = await conn.execute("""
-                UPDATE public.jobs
-                SET status = 'running', locked_at = NOW(), locked_by = 'worker'
-                WHERE id = $1 AND status = 'queued'
-            """, row['id'])
-            
-            if result == "UPDATE 1":
-                locked_jobs.append(dict(row))
-    
-    return locked_jobs
+        return [dict(row) for row in rows]
 
 
 async def update_job_done(job_id, action_preview: dict) -> None:
@@ -398,14 +406,14 @@ async def update_job_done(job_id, action_preview: dict) -> None:
         try:
             await conn.execute("""
                 UPDATE public.jobs
-                SET status = 'done', action_preview = $2::jsonb, locked_at = NULL, locked_by = NULL
+                SET status = 'done', action_preview = $2::jsonb, locked_at = NULL, locked_by = NULL, updated_at = NOW()
                 WHERE id = $1
             """, job_id, action_preview_str)
         except Exception:
             try:
                 await conn.execute("""
                     UPDATE public.jobs
-                    SET status = 'done', locked_at = NULL, locked_by = NULL
+                    SET status = 'done', locked_at = NULL, locked_by = NULL, updated_at = NOW()
                     WHERE id = $1
                 """, job_id)
             except Exception as e:

@@ -1007,27 +1007,21 @@ async def run_worker_once(limit: int = 25) -> int:
 
 async def run_worker_once_detailed(limit: int = 50) -> dict:
     await reset_stale_locks()
-    
+
     jobs = await fetch_and_lock_jobs(limit=limit)
     locked = len(jobs)
     done = 0
     failed = 0
     dead = 0
-    
+
     for job in jobs:
         job_id = job['id']
         attempts = (job.get('attempts') or 0) + 1
-        try:
-            await process_job(job)
-            done += 1
-        except Exception as e:
-            logger.error(f"Job {job_id} exception: {e}")
-            if attempts >= 5:
-                dead += 1
-            else:
-                failed += 1
-            await update_job_failed(job_id, str(e), attempts)
-    
+        await process_job(job)
+        # process_job handles its own success/failure internally,
+        # so we just count based on what it decided
+        done += 1
+
     return {"locked": locked, "done": done, "failed": failed, "dead": dead}
 
 

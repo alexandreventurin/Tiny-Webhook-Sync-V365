@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 WORKER_BUILD = "2026-03-19-001"
 
 _rate_limit_cooldown_until: dict[str, float] = {}
-API_THROTTLE_SECONDS = 1.0
+RATE_LIMIT_RESERVE = 3  # stop when remaining <= this
 
 class RateLimitError(Exception):
     def __init__(self, account: str, status_code: int, retry_after: int = 60):
@@ -55,7 +55,7 @@ class RateLimitError(Exception):
         super().__init__(f"Rate limited on account {account} (HTTP {status_code}), retry after {retry_after}s")
 
 async def call_tiny(account: str, client: TinyClient, method: str, *args, **kwargs):
-    """Call a TinyClient method with automatic 401 retry, rate limit detection, and throttle."""
+    """Call a TinyClient method with proactive rate limit control via x-ratelimit headers."""
     import time
     now = time.time()
     cooldown = _rate_limit_cooldown_until.get(account, 0)
@@ -64,17 +64,24 @@ async def call_tiny(account: str, client: TinyClient, method: str, *args, **kwar
         logger.info(f"Rate limit cooldown for {account}: waiting {wait:.0f}s")
         raise RateLimitError(account, 429, int(wait))
 
-    await asyncio.sleep(API_THROTTLE_SECONDS)
-
     try:
         result = await getattr(client, method)(*args, **kwargs)
+
+        # Proactive rate limit: check remaining quota after each call
+        remaining = client.last_ratelimit_remaining
+        reset_sec = client.last_ratelimit_reset or 60
+        if remaining is not None and remaining <= RATE_LIMIT_RESERVE:
+            _rate_limit_cooldown_until[account] = time.time() + reset_sec
+            logger.info(f"Rate limit proactive pause for {account}: remaining={remaining}, waiting {reset_sec}s until reset")
+            raise RateLimitError(account, 0, reset_sec)
+
         return result
     except TinyApiError as e:
         if e.status_code in (429, 403):
-            retry_after = 60
-            _rate_limit_cooldown_until[account] = time.time() + retry_after
-            logger.warning(f"Rate limit hit on {method} for account {account} (HTTP {e.status_code}), cooldown {retry_after}s")
-            raise RateLimitError(account, e.status_code, retry_after)
+            reset_sec = client.last_ratelimit_reset or 60
+            _rate_limit_cooldown_until[account] = time.time() + reset_sec
+            logger.warning(f"Rate limit 429 on {method} for account {account}, cooldown {reset_sec}s")
+            raise RateLimitError(account, e.status_code, reset_sec)
         if e.status_code != 401:
             raise
         logger.warning(f"Got 401 on {method} for account {account}, force-refreshing token...")
@@ -404,8 +411,12 @@ async def process_job(job: dict) -> None:
                 logger.warning(f"Error searching contacts: {e}")
             
             if not id_contato_c:
+                nome_raw = cliente.get('nome') or ''
+                nome_truncado = nome_raw[:50] if len(nome_raw) > 50 else nome_raw
+                if len(nome_raw) > 50:
+                    logger.warning(f"Job {job_id}: nome do contato truncado de {len(nome_raw)} para 50 chars: '{nome_raw}' -> '{nome_truncado}'")
                 contact_payload = {
-                    "nome": cliente.get('nome'),
+                    "nome": nome_truncado,
                     "cpfCnpj": cpf_cnpj,
                     "tipoPessoa": cliente.get('tipoPessoa') or ('J' if len(cpf_cnpj.replace('.','').replace('-','').replace('/','')) > 11 else 'F'),
                     "email": cliente.get('email'),
@@ -980,10 +991,11 @@ async def process_job(job: dict) -> None:
             logger.warning(f"Job {job_id} completed with unknown job_type: {job_type}")
     
     except RateLimitError as e:
-        delay_minutes = max(1, e.retry_after // 60)
-        logger.warning(f"Job {job_id} rate limited, rescheduling in {delay_minutes}min")
+        delay_minutes = max(1, (e.retry_after + 59) // 60)  # round up to next minute
+        logger.warning(f"Job {job_id} rate limited, rescheduling in {delay_minutes}min (reset in {e.retry_after}s)")
         safe_attempts = max(0, attempts - 1)
         await reschedule_job_with_backoff(job_id, safe_attempts, delay_minutes, str(e))
+        raise  # propagate so the batch loop can abort remaining jobs
 
     except Exception as e:
         error_msg = str(e)
@@ -991,17 +1003,32 @@ async def process_job(job: dict) -> None:
         await update_job_failed(job_id, error_msg, attempts)
 
 
+async def _requeue_remaining_jobs(jobs: list[dict], delay_minutes: int = 2):
+    """Requeue jobs that weren't processed due to rate limiting."""
+    for job in jobs:
+        job_id = job['id']
+        attempts = job.get('attempts') or 0
+        await reschedule_job_with_backoff(job_id, attempts, delay_minutes, "rate_limit_batch_abort")
+    if jobs:
+        logger.info(f"Rate limit: requeued {len(jobs)} remaining jobs with {delay_minutes}min delay")
+
+
 async def run_worker_once(limit: int = 25) -> int:
     await reset_stale_locks()
-    
+
     jobs = await fetch_and_lock_jobs(limit=limit)
-    
+
     if not jobs:
         return 0
-    
-    for job in jobs:
-        await process_job(job)
-    
+
+    for i, job in enumerate(jobs):
+        try:
+            await process_job(job)
+        except RateLimitError:
+            # Rate limit hit — requeue remaining unprocessed jobs and stop batch
+            await _requeue_remaining_jobs(jobs[i+1:])
+            break
+
     return len(jobs)
 
 
@@ -1011,18 +1038,18 @@ async def run_worker_once_detailed(limit: int = 50) -> dict:
     jobs = await fetch_and_lock_jobs(limit=limit)
     locked = len(jobs)
     done = 0
-    failed = 0
-    dead = 0
+    rate_limited = 0
 
-    for job in jobs:
-        job_id = job['id']
-        attempts = (job.get('attempts') or 0) + 1
-        await process_job(job)
-        # process_job handles its own success/failure internally,
-        # so we just count based on what it decided
-        done += 1
+    for i, job in enumerate(jobs):
+        try:
+            await process_job(job)
+            done += 1
+        except RateLimitError:
+            rate_limited = len(jobs) - i
+            await _requeue_remaining_jobs(jobs[i+1:])
+            break
 
-    return {"locked": locked, "done": done, "failed": failed, "dead": dead}
+    return {"locked": locked, "done": done, "rate_limited_requeued": rate_limited}
 
 
 TOKEN_REFRESH_MARGIN_MINUTES = 30

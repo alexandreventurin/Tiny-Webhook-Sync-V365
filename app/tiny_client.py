@@ -28,12 +28,23 @@ class TinyClient:
     def __init__(self, token: str):
         self._token = token
         self._base_url = TINY_API_BASE
-    
+        self.last_ratelimit_remaining: Optional[int] = None
+        self.last_ratelimit_reset: Optional[int] = None
+        self.last_ratelimit_limit: Optional[int] = None
+
     def _headers(self) -> dict:
         return {
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json"
         }
+
+    def _read_ratelimit_headers(self, response) -> None:
+        try:
+            self.last_ratelimit_remaining = int(response.headers.get("x-ratelimit-remaining", -1))
+            self.last_ratelimit_reset = int(response.headers.get("x-ratelimit-reset", 0))
+            self.last_ratelimit_limit = int(response.headers.get("x-ratelimit-limit", 0))
+        except (ValueError, TypeError):
+            pass
     
     async def ping_light(self) -> TinyPingResult:
         url = f"{self._base_url}/contatos"
@@ -73,59 +84,66 @@ class TinyClient:
         url = f"{self._base_url}/pedidos/{pedido_id}"
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, headers=self._headers())
+            self._read_ratelimit_headers(response)
             if response.status_code != 200:
                 raise TinyApiError(response.status_code, response.text, url)
             return response.json()
-    
+
     async def create_order(self, order_payload: dict) -> dict:
         url = f"{self._base_url}/pedidos"
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(url, headers=self._headers(), json=order_payload)
+            self._read_ratelimit_headers(response)
             if response.status_code not in (200, 201):
                 raise TinyApiError(response.status_code, response.text, url)
             return response.json()
-    
+
     async def search_contacts(self, cpf_cnpj: str) -> list:
         url = f"{self._base_url}/contatos"
         params = {"cpfCnpj": cpf_cnpj}
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, headers=self._headers(), params=params)
+            self._read_ratelimit_headers(response)
             if response.status_code != 200:
                 raise TinyApiError(response.status_code, response.text, url)
             data = response.json()
             return data.get("itens", [])
-    
+
     async def create_contact(self, contact_payload: dict) -> dict:
         url = f"{self._base_url}/contatos"
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(url, headers=self._headers(), json=contact_payload)
+            self._read_ratelimit_headers(response)
             if response.status_code not in (200, 201):
                 raise TinyApiError(response.status_code, response.text, url)
             return response.json()
-    
+
     async def search_products(self, codigo: str) -> list:
         url = f"{self._base_url}/produtos"
         params = {"codigo": codigo}
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, headers=self._headers(), params=params)
+            self._read_ratelimit_headers(response)
             if response.status_code != 200:
                 raise TinyApiError(response.status_code, response.text, url)
             data = response.json()
             return data.get("itens", [])
-    
+
     async def update_order_status(self, pedido_id: str, situacao: int) -> None:
         url = f"{self._base_url}/pedidos/{pedido_id}/situacao"
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.put(url, headers=self._headers(), json={"situacao": situacao})
+            self._read_ratelimit_headers(response)
             if response.status_code not in (200, 204):
                 raise TinyApiError(response.status_code, response.text, url)
         logger.info(f"Updated order {pedido_id} to situacao {situacao}")
-    
+
     async def add_order_tags(self, pedido_id: str, tags: list[str]) -> bool:
         url = f"{self._base_url}/pedidos/{pedido_id}/marcadores"
         body = [{"descricao": t} for t in tags]
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(url, headers=self._headers(), json=body)
+            self._read_ratelimit_headers(response)
             if response.status_code == 204:
                 logger.info(f"Added tags {tags} to order {pedido_id}")
                 return True
@@ -137,6 +155,7 @@ class TinyClient:
         url = f"{self._base_url}/notas-fiscais/{nota_id}"
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, headers=self._headers())
+            self._read_ratelimit_headers(response)
             if response.status_code != 200:
                 raise TinyApiError(response.status_code, response.text, url)
             return response.json()
@@ -145,6 +164,7 @@ class TinyClient:
         url = f"{self._base_url}/pedidos/{pedido_id}"
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.put(url, headers=self._headers(), json=fields)
+            self._read_ratelimit_headers(response)
             if response.status_code not in (200, 204):
                 raise TinyApiError(response.status_code, response.text, url)
             if response.status_code == 204:

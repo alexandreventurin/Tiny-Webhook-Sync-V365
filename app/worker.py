@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 WORKER_BUILD = "2026-03-19-001"
 
 _rate_limit_cooldown_until: dict[str, float] = {}
-RATE_LIMIT_RESERVE = 3  # stop when remaining <= this
+RATE_LIMIT_RESERVE = 8  # stop when remaining <= this (1 order = ~6-7 API calls)
 
 class RateLimitError(Exception):
     def __init__(self, account: str, status_code: int, retry_after: int = 60):

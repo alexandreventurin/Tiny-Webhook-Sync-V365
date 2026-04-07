@@ -538,6 +538,8 @@ async def process_job(job: dict) -> None:
             tag_job_created = False
             try:
                 tag_added = await call_tiny("B", client_c, "add_order_tags", venda_c_id, ["API Rejuderme"])
+            except RateLimitError:
+                logger.warning(f"Job {job_id}: rate limited adding tag to C order {venda_c_id}, will create retry job")
             except Exception as e:
                 logger.warning(f"Job {job_id}: failed to add tag to order {venda_c_id}: {e}")
             if not tag_added:
@@ -554,6 +556,10 @@ async def process_job(job: dict) -> None:
                 if token_a:
                     client_a = TinyClient(token_a)
                     tag_a_added = await call_tiny("A", client_a, "add_order_tags", str(venda_id), ["V365"])
+                else:
+                    logger.warning(f"Job {job_id}: no token for A, skipping tag V365 on order {venda_id}")
+            except RateLimitError:
+                logger.warning(f"Job {job_id}: rate limited adding tag V365 to A order {venda_id}, will create retry job")
             except Exception as e:
                 logger.warning(f"Job {job_id}: failed to add tag V365 to A order {venda_id}: {e}")
             if not tag_a_added:
@@ -562,6 +568,8 @@ async def process_job(job: dict) -> None:
                 tag_a_job_created = await insert_job(job_type="add_tag_a", dedupe_key=tag_a_dedupe, event_id=None, payload=tag_a_payload, delay_minutes=1)
                 if tag_a_job_created:
                     logger.info(f"Job {job_id}: tag A failed, created add_tag_a job for order {venda_id}")
+                else:
+                    logger.warning(f"Job {job_id}: tag A failed and add_tag_a job was NOT created (dedupe or error)")
 
             force_status_c = payload.get('force_status_c')
             force_status_applied = False

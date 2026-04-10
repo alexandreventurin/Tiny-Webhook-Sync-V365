@@ -48,21 +48,27 @@ def generate_dedupe_key(
     parts = [source, topic, str(venda_id or ""), job_type]
     if job_type == "sync_status" and codigo_situacao:
         parts.append(codigo_situacao)
+    # sync_tracking_c_to_a: dedupe por venda_c_id — se vier 2x em seguida, segundo vira no-op
     return ":".join(parts)
 
 
 def normalize_status(codigo_situacao) -> str | None:
     if codigo_situacao is None:
         return None
+    # Fonte oficial (Tiny API v3):
+    # 0=aberta, 1=faturada, 2=cancelada, 3=aprovada, 4=preparando_envio,
+    # 5=enviada, 6=entregue, 7=pronto_envio, 8=dados_incompletos, 9=nao_entregue
     num_map = {
-        1: "aberto",
-        2: "em_aberto",
+        0: "em_aberto",
+        1: "faturado",
+        2: "cancelado",
         3: "aprovado",
-        4: "faturado",
+        4: "preparando_envio",
         5: "enviado",
-        6: "pronto_envio",
-        7: "entregue",
-        9: "cancelado"
+        6: "entregue",
+        7: "pronto_envio",
+        8: "dados_incompletos",
+        9: "nao_entregue",
     }
     if isinstance(codigo_situacao, int):
         return num_map.get(codigo_situacao)
@@ -84,6 +90,8 @@ def determine_job_type(source: str, topic: str, codigo_situacao) -> str:
             return "sync_status"
     
     if source == "B" and topic == "vendas":
+        if status == "pronto_envio":
+            return "sync_tracking_c_to_a"
         if status in ("faturado", "cancelado"):
             return "sync_status"
     

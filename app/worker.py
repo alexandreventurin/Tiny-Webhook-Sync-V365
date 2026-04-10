@@ -977,6 +977,133 @@ async def process_job(job: dict) -> None:
                 await update_job_failed(job_id, f"add_tag_a failed after {attempts} attempts: {tag_error}", attempts)
                 logger.warning(f"Job {job_id} add_tag_a gave up after {attempts} attempts for order {tag_venda_a_id}")
 
+        elif job_type == 'sync_tracking_c_to_a':
+            # Sincroniza codigo/url de rastreio de C para A quando C entra em pronto_envio.
+            # Se A estiver num status anterior, avança A para pronto_envio (7).
+            # Se A já estiver à frente (entregue etc), só grava rastreio e mantém status.
+            if not await get_feature_flag("sync_tracking_pronto_envio"):
+                action_preview = {"would": "sync_tracking", "skipped": True, "reason": "sync_tracking_pronto_envio flag disabled"}
+                await update_job_done(job_id, action_preview)
+                logger.info(f"Job {job_id} skipped: sync_tracking_pronto_envio flag disabled")
+                return
+
+            if not venda_id:
+                await update_job_failed(job_id, "missing venda_id (venda_c_id)", attempts)
+                return
+
+            venda_c_id_str = str(venda_id)
+            mapping = await get_order_mapping_by_c(venda_c_id_str)
+            if not mapping or not mapping.get("venda_a_id"):
+                action_preview = {
+                    "would": "sync_tracking",
+                    "skipped": True,
+                    "reason": "not_mapped",
+                    "venda_c_id": venda_c_id_str,
+                    "note": "Pedido criado direto em C, sem par em A",
+                }
+                await update_job_skipped_not_mapped(job_id, action_preview)
+                logger.info(f"Job {job_id} sync_tracking skipped_not_mapped: venda_c_id={venda_c_id_str}")
+                return
+
+            venda_a_id_str = str(mapping["venda_a_id"])
+            external_key = mapping.get("external_key")
+
+            # 1) Lê detalhes do pedido em C pra pegar codigoRastreamento/urlRastreamento
+            token_c = await ensure_access_token("B")
+            if not token_c:
+                await update_job_failed(job_id, "No valid OAuth token for B", attempts)
+                return
+            client_c = TinyClient(token_c)
+            c_details = await call_tiny("B", client_c, "get_order_details", venda_c_id_str)
+            transportador_c = (c_details.get("transportador") or {}) if isinstance(c_details, dict) else {}
+            codigo_rastreio = (transportador_c.get("codigoRastreamento") or "").strip()
+            url_rastreio = (transportador_c.get("urlRastreamento") or "").strip()
+
+            if not codigo_rastreio and not url_rastreio:
+                action_preview = {
+                    "would": "sync_tracking",
+                    "skipped": True,
+                    "reason": "no_tracking_data",
+                    "venda_c_id": venda_c_id_str,
+                    "venda_a_id": venda_a_id_str,
+                    "note": "C está em pronto_envio mas transportador não tem rastreio ainda",
+                }
+                await update_job_done(job_id, action_preview)
+                logger.warning(f"Job {job_id} sync_tracking: C:{venda_c_id_str} sem rastreio (codigo/url vazios)")
+                return
+
+            # 2) Atualiza rastreio em A via PUT /pedidos/{id}/despacho
+            token_a = await ensure_access_token("A")
+            if not token_a:
+                await update_job_failed(job_id, "No valid OAuth token for A", attempts)
+                return
+            client_a = TinyClient(token_a)
+            try:
+                await call_tiny("A", client_a, "update_order_despacho", venda_a_id_str, codigo_rastreio, url_rastreio)
+            except TinyApiError as e:
+                # 400 típico: "Não é possível alterar a forma de envio de um pedido que já possui uma expedição criada"
+                if e.status_code == 400 and "expedi" in (e.body or "").lower():
+                    action_preview = {
+                        "would": "sync_tracking",
+                        "skipped": True,
+                        "reason": "a_has_expedicao",
+                        "venda_a_id": venda_a_id_str,
+                        "error_body": e.body[:200],
+                    }
+                    await update_job_done(job_id, action_preview)
+                    logger.warning(f"Job {job_id} sync_tracking: A:{venda_a_id_str} já tem expedição, pulando update despacho")
+                    return
+                raise
+
+            # 3) Só avança status se A estiver atrás de pronto_envio (7). Não rebaixa.
+            # Status numéricos oficiais do Tiny v3:
+            # 0=em_aberto, 1=faturado, 2=cancelado, 3=aprovado, 4=preparando_envio,
+            # 5=enviado, 6=entregue, 7=pronto_envio, 8=dados_incompletos, 9=nao_entregue
+            STATUS_RANK = {
+                "em_aberto": 1, "dados_incompletos": 1,
+                "aprovado": 2,
+                "preparando_envio": 3,
+                "pronto_envio": 4,
+                "enviado": 5,
+                "entregue": 6,
+                "faturado": 7,
+                "nao_entregue": 8,
+                "cancelado": 99,
+            }
+            PRONTO_ENVIO_CODE = 7
+            PRONTO_ENVIO_RANK = STATUS_RANK["pronto_envio"]
+
+            a_details = await call_tiny("A", client_a, "get_order_details", venda_a_id_str)
+            a_situacao_raw = (a_details or {}).get("situacao")
+            from app.utils import normalize_status
+            a_status_name = normalize_status(a_situacao_raw)
+            a_rank = STATUS_RANK.get(a_status_name or "", 0)
+
+            status_updated = False
+            if a_rank < PRONTO_ENVIO_RANK:
+                await call_tiny("A", client_a, "update_order_status", venda_a_id_str, PRONTO_ENVIO_CODE)
+                status_updated = True
+                logger.info(f"Job {job_id} sync_tracking: A:{venda_a_id_str} avançado para pronto_envio (de {a_status_name})")
+            else:
+                logger.info(f"Job {job_id} sync_tracking: A:{venda_a_id_str} já está em '{a_status_name}' (rank {a_rank}), mantém status")
+
+            # 4) Marca no orders_map pra echo prevention (janela de 5min)
+            await update_orders_map_sync(venda_a_id_str, venda_c_id_str, "pronto_envio")
+
+            action_preview = {
+                "would": "sync_tracking",
+                "done": True,
+                "venda_c_id": venda_c_id_str,
+                "venda_a_id": venda_a_id_str,
+                "external_key": external_key,
+                "codigo_rastreamento": codigo_rastreio,
+                "url_rastreamento": url_rastreio,
+                "a_previous_status": a_status_name,
+                "status_updated": status_updated,
+            }
+            await update_job_done(job_id, action_preview)
+            logger.info(f"Job {job_id} completed: sync_tracking C:{venda_c_id_str} -> A:{venda_a_id_str} (codigo={codigo_rastreio}, status_updated={status_updated})")
+
         elif job_type == 'noop':
             action_preview = {
                 "would": "noop",
@@ -984,7 +1111,7 @@ async def process_job(job: dict) -> None:
                 "source": source,
                 "topic": topic
             }
-            
+
             await update_job_done(job_id, action_preview)
             logger.info(f"Job {job_id} completed: noop")
         

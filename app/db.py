@@ -210,7 +210,7 @@ async def init_db():
                 await conn.execute("ALTER TABLE public.jobs DROP CONSTRAINT IF EXISTS jobs_job_type_check")
                 await conn.execute("""
                     ALTER TABLE public.jobs ADD CONSTRAINT jobs_job_type_check
-                    CHECK (job_type = ANY (ARRAY['noop','create_order_c','sync_status','fetch_label','fetch_nf_link','sync_nf_link','fetch_order_a','add_tag_c','add_tag_a']))
+                    CHECK (job_type = ANY (ARRAY['noop','create_order_c','sync_status','fetch_label','fetch_nf_link','sync_nf_link','fetch_order_a','add_tag_c','add_tag_a','sync_tracking_c_to_a']))
                 """)
             except Exception:
                 pass
@@ -223,7 +223,8 @@ async def init_db():
                     ('sync_status_entregue', false, true, 'Sync Status: Entregue', 'Espelha status entregue de A para C'),
                     ('sync_status_cancelado', false, true, 'Sync Status: Cancelado', 'Espelha status cancelado entre A e C'),
                     ('sync_status_faturado', false, true, 'Sync Status: Faturado', 'Espelha status faturado de C para A'),
-                    ('sync_nf_link', false, true, 'Enviar NF', 'Envia dados da NF de C para observações de A')
+                    ('sync_nf_link', false, true, 'Enviar NF', 'Envia dados da NF de C para observações de A'),
+                    ('sync_tracking_pronto_envio', true, true, 'Sync Rastreio C→A (Pronto Envio)', 'Quando C entra em pronto_envio, copia código/URL de rastreio para A e avança status')
                 ON CONFLICT (key) DO UPDATE SET functional = EXCLUDED.functional, label = EXCLUDED.label, description = EXCLUDED.description
             """)
 
@@ -1079,13 +1080,82 @@ async def get_import_run_items(run_id: int, limit: int = 200, offset: int = 0) -
     p = await get_pool()
     async with p.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT venda_a_id, numero_pedido, data_pedido, status_em_a, action, motivo, created_at
-            FROM public.import_run_items
-            WHERE run_id = $1
-            ORDER BY id DESC
+            SELECT iri.venda_a_id, iri.numero_pedido, iri.data_pedido, iri.status_em_a,
+                   iri.action, iri.motivo, iri.created_at,
+                   j.status AS job_status,
+                   j.action_preview,
+                   tag_a_j.status AS tag_a_job_status,
+                   tag_c_j.status AS tag_c_job_status
+            FROM public.import_run_items iri
+            LEFT JOIN public.jobs j
+              ON j.dedupe_key = 'A:vendas:' || iri.venda_a_id || ':create_order_c'
+              AND j.job_type = 'create_order_c'
+            LEFT JOIN public.orders_map om
+              ON om.venda_a_id = CAST(iri.venda_a_id AS INTEGER)
+            LEFT JOIN public.jobs tag_a_j
+              ON tag_a_j.dedupe_key = 'A:tag:' || iri.venda_a_id || ':add_tag_a'
+              AND tag_a_j.job_type = 'add_tag_a'
+            LEFT JOIN public.jobs tag_c_j
+              ON tag_c_j.dedupe_key = 'C:tag:' || CAST(om.venda_c_id AS TEXT) || ':add_tag_c'
+              AND tag_c_j.job_type = 'add_tag_c'
+            WHERE iri.run_id = $1
+            ORDER BY iri.id DESC
             LIMIT $2 OFFSET $3
         """, run_id, limit, offset)
-        return [dict(r) for r in rows]
+
+        import json as _json
+        result = []
+        for r in rows:
+            item = dict(r)
+            # Parse action_preview to extract tag and status info
+            ap = item.pop('action_preview', None)
+            ap_data = {}
+            if ap:
+                try:
+                    ap_data = _json.loads(ap) if isinstance(ap, str) else ap
+                except Exception:
+                    pass
+
+            # Determine display status
+            action = item.get('action')
+            job_status = item.get('job_status')
+            if action == 'job_created':
+                if job_status == 'done' and ap_data.get('created'):
+                    item['display_status'] = 'clonado_em_c'
+                elif job_status == 'running':
+                    item['display_status'] = 'processando'
+                elif job_status in ('failed', 'dead'):
+                    item['display_status'] = 'erro'
+                else:
+                    item['display_status'] = 'job_criado'
+            elif action == 'already_imported':
+                item['display_status'] = 'ja_existia'
+            else:
+                item['display_status'] = 'ignorado'
+
+            # Determine status in C
+            situacao_target = ap_data.get('situacao_target')
+            item['status_c'] = situacao_target if situacao_target else None
+
+            # Determine tags
+            tag_c_ok = ap_data.get('tag_added', False) or (item.get('tag_c_job_status') == 'done')
+            tag_a_ok = ap_data.get('tag_a_added', False) or (item.get('tag_a_job_status') == 'done')
+            if tag_a_ok and tag_c_ok:
+                item['tags'] = 'A+C'
+            elif tag_a_ok:
+                item['tags'] = 'A'
+            elif tag_c_ok:
+                item['tags'] = 'C'
+            else:
+                item['tags'] = None
+
+            # Clean up internal fields
+            item.pop('tag_a_job_status', None)
+            item.pop('tag_c_job_status', None)
+            item.pop('job_status', None)
+
+            result.append(item)
+        return result
 
 
 async def get_import_runs_list(limit: int = 5, offset: int = 0) -> tuple[list, int]:

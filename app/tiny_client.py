@@ -171,6 +171,21 @@ class TinyClient:
                 return {}
             return response.json()
 
+    async def update_order_despacho(self, pedido_id: str, codigo_rastreamento: str, url_rastreamento: str) -> None:
+        """Atualiza info de despacho (rastreio) de um pedido. Usa PUT /pedidos/{id}/despacho.
+        Nota: este endpoint falha (400) se o pedido ja tem expedicao criada."""
+        url = f"{self._base_url}/pedidos/{pedido_id}/despacho"
+        payload = {
+            "codigoRastreamento": codigo_rastreamento or "",
+            "urlRastreamento": url_rastreamento or "",
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.put(url, headers=self._headers(), json=payload)
+            self._read_ratelimit_headers(response)
+            if response.status_code not in (200, 204):
+                raise TinyApiError(response.status_code, response.text, url)
+        logger.info(f"Updated order {pedido_id} despacho: codigo={codigo_rastreamento}")
+
     async def list_orders(self, pagina: int = 1, data_inicial: str = None, data_final: str = None, limite: int = 100, sort: str = None) -> dict:
         url = f"{self._base_url}/pedidos"
         params = {"pagina": pagina, "limite": min(limite, 100)}

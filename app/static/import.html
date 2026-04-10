@@ -41,6 +41,7 @@ td { padding: 8px; border-bottom: 1px solid #1e293b; }
 .action-created { color: #4ade80; }
 .action-skipped { color: #94a3b8; }
 .action-ignored { color: #fb923c; }
+td.status-running { color: #60a5fa; }
 .empty-msg { text-align: center; color: #64748b; padding: 30px; }
 .progress-bar { width: 100%; height: 6px; background: #334155; border-radius: 3px; overflow: hidden; margin-top: 8px; }
 .progress-fill { height: 100%; background: #3b82f6; transition: width 0.3s; border-radius: 3px; }
@@ -126,7 +127,7 @@ td { padding: 8px; border-bottom: 1px solid #1e293b; }
     <div id="detailStats"></div>
     <div style="margin-top:14px">
       <table>
-        <thead><tr><th>Pedido A</th><th>Número</th><th>Data</th><th>Status A</th><th>Ação</th><th>Motivo</th></tr></thead>
+        <thead><tr><th>Pedido A</th><th>Número</th><th>Data</th><th>Status A</th><th>Status</th><th>Status C</th><th>Motivo</th><th>Tags</th></tr></thead>
         <tbody id="detailItems"></tbody>
       </table>
     </div>
@@ -158,7 +159,7 @@ async function loadRuns() {
       document.getElementById('runsPagination').innerHTML = '';
       return;
     }
-    let html = '<table><thead><tr><th>#</th><th>Status</th><th>Período</th><th>Encontrados</th><th>Jobs</th><th style="color:#38bdf8">Criados C</th><th>Já Replic.</th><th>Ignorados</th><th>Iniciado</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>#</th><th>Status</th><th>Período</th><th>Encontrados</th><th>Jobs</th><th style="color:#38bdf8">Clonados C</th><th>Já Existia</th><th>Ignorados</th><th>Iniciado</th></tr></thead><tbody>';
     for (const r of runs) {
       const statusClass = `status-${r.status}`;
       html += `<tr class="run-row" onclick="showDetail(${r.id})">
@@ -258,8 +259,8 @@ async function refreshDetail() {
       <div class="stats-grid">
         <div class="stat-box"><div class="val">${r.orders_found || 0}</div><div class="lbl">Encontrados</div></div>
         <div class="stat-box"><div class="val" style="color:#4ade80">${r.jobs_created || 0}</div><div class="lbl">Jobs Criados</div></div>
-        <div class="stat-box"><div class="val" style="color:#38bdf8">${r.created_in_c || 0}</div><div class="lbl">Criados em C</div></div>
-        <div class="stat-box"><div class="val" style="color:#94a3b8">${r.orders_skipped || 0}</div><div class="lbl">Já Replicados</div></div>
+        <div class="stat-box"><div class="val" style="color:#38bdf8">${r.created_in_c || 0}</div><div class="lbl">Clonados em C</div></div>
+        <div class="stat-box"><div class="val" style="color:#94a3b8">${r.orders_skipped || 0}</div><div class="lbl">Já Existia</div></div>
         <div class="stat-box"><div class="val" style="color:#fb923c">${r.orders_ignored || 0}</div><div class="lbl">Ignorados</div></div>
       </div>
       ${isRunning ? `<div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>` : ''}
@@ -268,20 +269,42 @@ async function refreshDetail() {
 
     let tbody = '';
     for (const it of items) {
-      const actionClass = it.action === 'job_created' ? 'action-created' : it.action === 'already_imported' ? 'action-skipped' : 'action-ignored';
-      const actionLabel = it.action === 'job_created' ? 'Job Criado' : it.action === 'already_imported' ? 'Já Replicado' : 'Ignorado';
-      const motivo = it.motivo || (it.action === 'already_imported' ? 'Já existe no mapa' : '-');
-      const motivoStyle = it.action === 'ignored' ? 'color:#fb923c' : 'color:#64748b';
+      // Status display
+      const ds = it.display_status || it.action;
+      let statusLabel, statusClass;
+      switch(ds) {
+        case 'clonado_em_c': statusLabel = 'Clonado em C'; statusClass = 'action-created'; break;
+        case 'processando': statusLabel = 'Processando'; statusClass = 'status-running'; break;
+        case 'erro': statusLabel = 'Erro'; statusClass = 'action-ignored'; break;
+        case 'job_criado': statusLabel = 'Job Criado'; statusClass = 'action-created'; break;
+        case 'ja_existia': statusLabel = 'Já Existia'; statusClass = 'action-skipped'; break;
+        case 'ignorado': statusLabel = 'Ignorado'; statusClass = 'action-ignored'; break;
+        default: statusLabel = ds; statusClass = '';
+      }
+      // Status em C
+      const statusCMap = {'entregue':'Entregue','enviado':'Enviado','em_aberto':'Em Aberto','pronto_envio':'Pronto Envio','cancelado':'Cancelado','faturado':'Faturado'};
+      const statusC = it.status_c ? (statusCMap[it.status_c] || it.status_c) : '-';
+      const statusCStyle = it.status_c ? 'color:#38bdf8' : 'color:#64748b';
+      // Tags
+      let tagsHtml = '-';
+      if (it.tags === 'A+C') tagsHtml = '<span style="color:#4ade80;font-weight:600">A+C</span>';
+      else if (it.tags === 'A') tagsHtml = '<span style="color:#fbbf24">A</span>';
+      else if (it.tags === 'C') tagsHtml = '<span style="color:#fbbf24">C</span>';
+      // Motivo
+      const motivo = it.motivo || (ds === 'ja_existia' ? 'Já existe no mapa' : '-');
+      const motivoStyle = ds === 'ignorado' ? 'color:#fb923c' : 'color:#64748b';
       tbody += `<tr>
         <td>${it.venda_a_id}</td>
         <td>${it.numero_pedido || '-'}</td>
         <td>${it.data_pedido || '-'}</td>
         <td>${it.status_em_a || '-'}</td>
-        <td class="${actionClass}">${actionLabel}</td>
+        <td class="${statusClass}">${statusLabel}</td>
+        <td style="${statusCStyle}">${statusC}</td>
         <td style="${motivoStyle};font-size:0.8rem">${motivo}</td>
+        <td style="text-align:center">${tagsHtml}</td>
       </tr>`;
     }
-    document.getElementById('detailItems').innerHTML = tbody || '<tr><td colspan="6" style="text-align:center;color:#64748b">Nenhum item ainda</td></tr>';
+    document.getElementById('detailItems').innerHTML = tbody || '<tr><td colspan="8" style="text-align:center;color:#64748b">Nenhum item ainda</td></tr>';
 
     if (!isRunning) {
       stopPoll();

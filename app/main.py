@@ -33,7 +33,7 @@ from app.schemas import (
     WebhookResponse, HealthResponse, JobsListResponse, JobItem, RunJobsResponse,
     OrderAItem, OrderAListResponse, OrderASnapshotResponse
 )
-from app.utils import generate_event_key, generate_dedupe_key, determine_job_type, to_int_or_none
+from app.utils import generate_event_key, generate_dedupe_key, determine_job_type, normalize_status, to_int_or_none
 from app.worker import worker_loop, stop_worker, run_worker_once, run_worker_once_detailed, WORKER_BUILD
 
 
@@ -690,7 +690,8 @@ def _normalize_text(value):
     return str(value).strip()
 
 
-def _order_summary_from_snapshot(row: dict) -> dict:
+def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None = None) -> dict:
+    mapped_product_ids = mapped_product_ids or set()
     payload = _json_payload(row.get("fetched_payload")) or _json_payload(row.get("webhook_payload"))
     cliente = payload.get("cliente") if isinstance(payload, dict) else {}
     ecommerce = payload.get("ecommerce") if isinstance(payload, dict) else {}
@@ -705,20 +706,48 @@ def _order_summary_from_snapshot(row: dict) -> dict:
     if not isinstance(endereco_entrega, dict):
         endereco_entrega = {}
 
-    reasons = []
+    adjustment_reasons = []
+    block_reasons = []
     if not cliente.get("nome"):
-        reasons.append("cliente_sem_nome")
+        adjustment_reasons.append("cliente_sem_nome")
     if not cliente.get("cpfCnpj"):
-        reasons.append("cliente_sem_cpf_cnpj")
+        adjustment_reasons.append("cliente_sem_cpf_cnpj")
     if not itens:
-        reasons.append("sem_itens")
+        adjustment_reasons.append("sem_itens")
     if not payload:
-        reasons.append("sem_detalhes_do_pedido")
+        adjustment_reasons.append("sem_detalhes_do_pedido")
 
     deposito = payload.get("deposito") if isinstance(payload, dict) else {}
     deposito_id = deposito.get("id") if isinstance(deposito, dict) else None
     if deposito_id and str(deposito_id) != "336403602":
-        reasons.append("deposito_nao_exportavel")
+        block_reasons.append("deposito_nao_exportavel")
+
+    status_normalized = normalize_status(payload.get("situacao")) if isinstance(payload, dict) else None
+    if status_normalized and status_normalized not in {"aprovado", "pronto_envio", "enviado", "entregue"}:
+        block_reasons.append(f"status_nao_exportavel:{status_normalized}")
+
+    missing_skus = []
+    for item in itens:
+        produto = item.get("produto") if isinstance(item, dict) else {}
+        produto_id = produto.get("id") if isinstance(produto, dict) else None
+        try:
+            produto_id_int = int(produto_id) if produto_id is not None else None
+        except (TypeError, ValueError):
+            produto_id_int = None
+        if produto_id_int and mapped_product_ids and produto_id_int not in mapped_product_ids:
+            missing_skus.append({
+                "id": produto_id_int,
+                "sku": produto.get("sku") if isinstance(produto, dict) else None,
+            })
+    if missing_skus:
+        adjustment_reasons.append("produto_sem_mapeamento")
+
+    if block_reasons:
+        export_category = "do_not_export"
+    elif adjustment_reasons:
+        export_category = "needs_adjustment"
+    else:
+        export_category = "valid"
 
     return {
         "venda_a_id": str(row.get("venda_a_id") or ""),
@@ -727,13 +756,18 @@ def _order_summary_from_snapshot(row: dict) -> dict:
         "cliente": cliente.get("nome"),
         "cpf_cnpj": cliente.get("cpfCnpj"),
         "situacao": payload.get("situacao"),
+        "situacao_normalized": status_normalized,
         "data": payload.get("data") or payload.get("dataPedido"),
         "cidade": endereco_entrega.get("municipio") or endereco_entrega.get("cidade"),
         "uf": endereco_entrega.get("uf"),
         "itens": len(itens),
         "updated_at": row.get("updated_at"),
-        "valid_for_export": len(reasons) == 0,
-        "reasons": reasons,
+        "valid_for_export": export_category == "valid",
+        "export_category": export_category,
+        "adjustment_reasons": adjustment_reasons,
+        "block_reasons": block_reasons,
+        "missing_skus": missing_skus,
+        "reasons": adjustment_reasons + block_reasons,
     }
 
 
@@ -799,8 +833,14 @@ async def admin_orders_panel_data(limit: int = 120):
             ORDER BY updated_at DESC
             LIMIT $1
         """, limit)
+        mapped_product_rows = await conn.fetch("""
+            SELECT id_a
+            FROM public.products_map
+            WHERE id_c IS NOT NULL
+        """)
 
-    origin = [_order_summary_from_snapshot(dict(row)) for row in origin_rows]
+    mapped_product_ids = {int(row["id_a"]) for row in mapped_product_rows if row["id_a"] is not None}
+    origin = [_order_summary_from_snapshot(dict(row), mapped_product_ids) for row in origin_rows]
     synced = []
     for row in synced_rows:
         item = dict(row)
@@ -825,7 +865,8 @@ async def admin_orders_panel_data(limit: int = 120):
     return {
         "origin": {
             "valid": [item for item in origin if item["valid_for_export"]],
-            "invalid": [item for item in origin if not item["valid_for_export"]],
+            "needs_adjustment": [item for item in origin if item["export_category"] == "needs_adjustment"],
+            "do_not_export": [item for item in origin if item["export_category"] == "do_not_export"],
         },
         "synced": synced,
         "errors": errors,

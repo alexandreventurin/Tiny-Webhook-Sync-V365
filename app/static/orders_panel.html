@@ -95,19 +95,24 @@ function render(){
 }
 
 function renderSummary(){
-  const d=state.data||{origin:{valid:[],invalid:[]},synced:[],errors:[]};
+  const d=state.data||{origin:{valid:[],needs_adjustment:[],do_not_export:[]},synced:[],errors:[]};
   $('summary').innerHTML=[
-    ['Válidos para exportação',d.origin.valid.length],
-    ['Não aceitos',d.origin.invalid.length],
+    ['Prontos para exportação',d.origin.valid.length],
+    ['Precisam ajuste',d.origin.needs_adjustment.length],
+    ['Não exportar',d.origin.do_not_export.length],
     ['Sincronizados',d.synced.length],
     ['Com erro',d.errors.length],
   ].map(([label,value])=>`<div class="metric"><div class="value">${value}</div><div class="label">${label}</div></div>`).join('');
 }
 
 function renderSubtabs(){
-  const d=state.data||{origin:{valid:[],invalid:[]},synced:[],errors:[]};
+  const d=state.data||{origin:{valid:[],needs_adjustment:[],do_not_export:[]},synced:[],errors:[]};
   if(state.tab==='origin'){
-    const items=[['valid','Válidos para exportação',d.origin.valid.length],['invalid','Não aceitos',d.origin.invalid.length]];
+    const items=[
+      ['valid','Prontos para exportação',d.origin.valid.length],
+      ['needs_adjustment','Precisam ajuste',d.origin.needs_adjustment.length],
+      ['do_not_export','Não exportar',d.origin.do_not_export.length],
+    ];
     $('subtabs').innerHTML=items.map(([key,label,count])=>`<button class="subtab ${state.subtab===key?'active':''}" data-subtab="${key}">${label} (${count})</button>`).join('');
   }else if(state.tab==='synced'){
     const statuses=[...new Set(d.synced.map(x=>x.situacao_a||x.last_sync_status||'sem status'))].sort();
@@ -129,17 +134,22 @@ function table(headers,rows){
 }
 
 function renderTable(){
-  const d=state.data||{origin:{valid:[],invalid:[]},synced:[],errors:[]};
+  const d=state.data||{origin:{valid:[],needs_adjustment:[],do_not_export:[]},synced:[],errors:[]};
   if(state.tab==='origin'){
-    const list=(state.subtab==='invalid'?d.origin.invalid:d.origin.valid).filter(matches);
+    const sourceLists={
+      valid:d.origin.valid||[],
+      needs_adjustment:d.origin.needs_adjustment||[],
+      do_not_export:d.origin.do_not_export||[],
+    };
+    const list=(sourceLists[state.subtab]||sourceLists.valid).filter(matches);
     $('tableWrap').innerHTML=table(['Pedido','Cliente','Situação','Entrega','Itens','Motivos'],list.map(x=>`
       <tr data-a="${esc(x.venda_a_id)}">
         <td><strong>${esc(x.numero||x.venda_a_id)}</strong><div class="small mono">A ${esc(x.venda_a_id)}</div></td>
         <td>${esc(x.cliente)}<div class="small">${esc(x.cpf_cnpj)}</div></td>
-        <td>${badge(x.situacao||'sem status',x.valid_for_export?'ok':'warn')}</td>
+        <td>${badge(x.situacao_normalized||x.situacao||'sem status',x.export_category==='valid'?'ok':(x.export_category==='do_not_export'?'bad':'warn'))}</td>
         <td>${esc([x.cidade,x.uf].filter(Boolean).join(' / '))}</td>
         <td>${esc(x.itens)}</td>
-        <td><div class="reason">${x.reasons.length?x.reasons.map(r=>badge(r,'warn')).join(''):badge('pronto','ok')}</div></td>
+        <td><div class="reason">${x.reasons.length?x.reasons.map(r=>badge(r,x.export_category==='do_not_export'?'bad':'warn')).join(''):badge('pronto','ok')}</div></td>
       </tr>`));
     document.querySelectorAll('tr[data-a]').forEach(r=>r.onclick=()=>openDetail({a:r.dataset.a}));
   }else if(state.tab==='synced'){

@@ -16,14 +16,13 @@ SERVER_STARTED_AT = datetime.now(timezone.utc)
 
 from app.db import (
     init_db, close_db, insert_event, insert_job,
-    get_events_count, get_jobs_count_by_status,
-    get_jobs_list, get_last_event_at, get_last_job_done_at,
+    get_jobs_list,
     get_orders_a_list, get_order_a_snapshot, get_orders_map_list,
     check_is_echo, update_event_action_result,
     get_order_mapping_by_a, get_order_mapping_by_c
 )
 from app.schemas import (
-    WebhookResponse, HealthResponse, JobsListResponse, JobItem, RunJobsResponse,
+    WebhookResponse, JobsListResponse, JobItem, RunJobsResponse,
     OrderAItem, OrderAListResponse, OrderASnapshotResponse
 )
 from app.utils import generate_event_key, generate_dedupe_key, determine_job_type, to_int_or_none
@@ -277,25 +276,6 @@ async def webhook_c_notas_fiscais(request: Request):
     await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload)
     
     return JSONResponse(content={"ok": True})
-
-
-@app.get("/health", response_model=HealthResponse)
-async def health():
-    events_total = await get_events_count()
-    jobs_queued = await get_jobs_count_by_status('queued')
-    jobs_failed = await get_jobs_count_by_status('failed')
-    jobs_dead = await get_jobs_count_by_status('dead')
-    last_event_at = await get_last_event_at()
-    last_job_done_at = await get_last_job_done_at()
-    
-    return HealthResponse(
-        events_total=events_total,
-        jobs_queued=jobs_queued,
-        jobs_failed=jobs_failed,
-        jobs_dead=jobs_dead,
-        last_event_at=last_event_at,
-        last_job_done_at=last_job_done_at
-    )
 
 
 @app.get("/admin/jobs", response_model=JobsListResponse)

@@ -71,6 +71,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .status-failed{background:#fef2f2;color:#dc2626}
 .status-dead{background:#fce7f3;color:#9d174d}
 .status-skipped_not_mapped{background:#f3f4f6;color:#9ca3af}
+.status-waiting_sku{background:#fff7ed;color:#ea580c}
 .job-type{font-family:monospace;font-size:12px;color:#555}
 .job-preview{font-size:11px;color:#888;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .job-error{font-size:11px;color:#dc2626;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -174,6 +175,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
           <option value="failed">failed</option>
           <option value="dead">dead</option>
           <option value="skipped_not_mapped">not_mapped</option>
+          <option value="waiting_sku">waiting_sku</option>
         </select>
         <select class="filter-select" id="jobsType" onchange="loadJobs()">
           <option value="">Tipo: Todos</option>
@@ -181,6 +183,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
           <option value="create_order_c">create_order_c</option>
           <option value="sync_status">sync_status</option>
           <option value="sync_nf_link">sync_nf_link</option>
+          <option value="sync_tracking_c_to_a">sync_tracking_c_to_a</option>
+          <option value="update_numero_compra">update_numero_compra</option>
           <option value="noop">noop</option>
         </select>
       </div>
@@ -229,7 +233,8 @@ function topicBadge(topic) {
 }
 
 function statusBadge(status) {
-  const label = status === 'skipped_not_mapped' ? 'not_mapped' : status;
+  const labels = {'skipped_not_mapped': 'not_mapped', 'waiting_sku': 'aguardando SKU'};
+  const label = labels[status] || status;
   return `<span class="status-badge status-${status}">${label}</span>`;
 }
 
@@ -245,6 +250,8 @@ function actionBadge(action_result) {
       'create_order_c': 'Criar C',
       'sync_status': 'Sync Status',
       'sync_nf_link': 'Sync NF',
+      'sync_tracking_c_to_a': 'Sync Rastreio',
+      'update_numero_compra': 'Atualizar nº Compra',
     };
     return `<span class="ev-action act-job">\u2192 ${labels[jt] || jt}</span>`;
   }
@@ -259,6 +266,10 @@ function previewText(job) {
     let ap = job.action_preview;
     if (typeof ap === 'string') { try { ap = JSON.parse(ap); } catch(e) { return `<span class="job-preview">${escHtml(truncate(ap, 50))}</span>`; } }
     if (job.job_type === 'noop' && ap.would === 'noop') return '<span class="job-preview" title="Pedido sem mapeamento A\u2194C" style="color:#9ca3af">Sem par</span>';
+    if (ap.missing_skus && job.status === 'waiting_sku') {
+      const skus = ap.missing_skus.map(s => s.sku).join(', ');
+      return `<span class="job-preview" style="color:#ea580c" title="SKUs faltando: ${escHtml(skus)}">SKU: ${escHtml(truncate(skus, 40))}</span>`;
+    }
     if (ap.skipped) return `<span class="job-preview" title="${escHtml(ap.reason||'')}">${escHtml(ap.reason||'skipped')}</span>`;
     if (ap.dry_run) return `<span class="job-preview">dry-run</span>`;
     if (ap.done || ap.created) {
@@ -504,16 +515,76 @@ async function loadStats() {
     const res = await fetch(API + '/admin/dashboard');
     const data = await res.json();
     const sg = document.getElementById('statsGrid');
+    const waitingSku = (data.job_counts||{}).waiting_sku || 0;
+    const trackingSkipped = data.tracking_skipped_recent || 0;
+    // Alerta de worker travado: aparece se sem pulsar há mais de 5 min
+    const workerAge = data.worker_heartbeat_age_seconds;
+    const workerStale = workerAge != null && workerAge > 300;
+    const workerAgeLabel = workerAge == null ? '?' :
+      workerAge < 60 ? Math.round(workerAge) + 's' :
+      workerAge < 3600 ? Math.round(workerAge / 60) + ' min' :
+      Math.round(workerAge / 3600) + ' h';
     sg.innerHTML = `
       <div class="stat blue"><div class="value">${data.events_total || 0}</div><div class="label">Webhooks</div></div>
       <div class="stat green"><div class="value">${data.today_done || 0}</div><div class="label">Hoje OK</div></div>
-      <div class="stat red"><div class="value">${data.today_failed || 0}</div><div class="label">Hoje Erro</div></div>
+      <div class="stat red">
+        <div class="value">${data.today_failed || 0}</div><div class="label">Hoje Erro</div>
+        ${(data.job_counts||{}).failed > 0 ? `<button class="refresh-btn" onclick="retryFailed()" style="margin:8px auto 0;font-size:11px;padding:4px 10px;background:#ef4444;color:#fff">Reprocessar</button>` : ''}
+      </div>
       <div class="stat yellow"><div class="value">${(data.job_counts||{}).queued || 0}</div><div class="label">Na Fila</div></div>
       <div class="stat"><div class="value">${data.orders_replicated || 0}</div><div class="label">Replicados</div></div>
+      ${waitingSku > 0 ? `
+      <div class="stat" style="background:#fff7ed;border:1px solid #fed7aa">
+        <div class="value" style="color:#ea580c">${waitingSku}</div>
+        <div class="label" style="color:#9a3412">Aguardando SKU</div>
+        <button class="refresh-btn" onclick="retryWaitingSku()" style="margin:8px auto 0;font-size:11px;padding:4px 10px;background:#ea580c;color:#fff">Reprocessar</button>
+        <a href="https://supabase.com/dashboard/project/wqselbvfnsxebogfycnd/editor?schema=public&table=products_map" target="_blank" style="display:block;font-size:10px;color:#9a3412;margin-top:4px;opacity:.7">Editar produtos</a>
+      </div>` : ''}
+      ${trackingSkipped > 0 ? `
+      <div class="stat" style="background:#eff6ff;border:1px solid #bfdbfe">
+        <div class="value" style="color:#2563eb">${trackingSkipped}</div>
+        <div class="label" style="color:#1e40af">Sem Rastreio</div>
+        <button class="refresh-btn" onclick="retryTrackingSkipped()" style="margin:8px auto 0;font-size:11px;padding:4px 10px;background:#2563eb;color:#fff">Reprocessar</button>
+      </div>` : ''}
+      ${workerStale ? `
+      <div class="stat" style="background:#fef2f2;border:1px solid #fecaca;grid-column:span 2">
+        <div class="value" style="color:#dc2626;font-size:24px">⚠️ Worker instável</div>
+        <div class="label" style="color:#991b1b">Última atividade há ${workerAgeLabel}. Reinicialização automática em andamento.</div>
+      </div>` : ''}
     `;
   } catch(e) {
     document.getElementById('statsGrid').innerHTML = '<div class="stat red"><div class="value">!</div><div class="label">Erro</div></div>';
   }
+}
+
+async function retryFailed() {
+  if (!confirm('Reprocessar todos os jobs com erro?')) return;
+  try {
+    const res = await fetch(API + '/admin/jobs/retry-failed', {method: 'POST'});
+    const data = await res.json();
+    alert(data.retried + ' job(s) recolocado(s) na fila');
+    refresh();
+  } catch(e) { alert('Erro: ' + e.message); }
+}
+
+async function retryWaitingSku() {
+  if (!confirm('Reprocessar pedidos aguardando SKU?')) return;
+  try {
+    const res = await fetch(API + '/admin/jobs/retry-waiting-sku', {method: 'POST'});
+    const data = await res.json();
+    alert(data.requeued + ' pedido(s) recolocado(s) na fila');
+    refresh();
+  } catch(e) { alert('Erro: ' + e.message); }
+}
+
+async function retryTrackingSkipped() {
+  if (!confirm('Reprocessar TODOS os pedidos sem rastreio?\\n\\nO sistema vai tentar buscar o código de rastreio em C novamente, escalonado em 10 jobs/minuto. Pode levar várias horas dependendo do volume.\\n\\nÉ idempotente: pode rodar várias vezes sem problema.')) return;
+  try {
+    const res = await fetch(API + '/admin/jobs/retry-tracking-skipped', {method: 'POST'});
+    const data = await res.json();
+    alert(data.requeued + ' pedido(s) recolocado(s) na fila. Tempo estimado: ' + data.estimated_duration_minutes + ' min.');
+    refresh();
+  } catch(e) { alert('Erro: ' + e.message); }
 }
 
 async function refresh() {

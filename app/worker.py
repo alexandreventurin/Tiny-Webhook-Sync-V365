@@ -24,11 +24,14 @@ from app.db import (
     get_venda_c_by_nota_fiscal,
     insert_job,
     reset_stale_locks,
+    update_worker_heartbeat,
     count_orders_replicated_to_c,
     load_products_map,
     load_products_prices,
     get_feature_flag,
-    update_orders_map_sync
+    update_orders_map_sync,
+    update_job_waiting_sku,
+    upsert_partial_product,
 )
 from app.settings import (
     TINY_A_TOKEN, TINY_C_TOKEN, 
@@ -202,11 +205,12 @@ def map_forma_frete(forma_envio_nome: str | None, forma_frete_origem: str | None
     return config.get("defaultFormaFrete")
 
 
-async def build_itens_dest_v3(itens_src: list, retry_on_miss: bool = True) -> list:
+async def build_itens_dest_v3(itens_src: list, retry_on_miss: bool = True) -> tuple:
+    """Retorna (itens_mapeados, missing_skus). missing_skus = [(produto_id, sku), ...]"""
     global PRODUTO_ID_MAP
     out = []
     missing_ids = []
-    
+
     for src in itens_src:
         if not isinstance(src, dict):
             continue
@@ -229,17 +233,17 @@ async def build_itens_dest_v3(itens_src: list, retry_on_miss: bool = True) -> li
             "valorUnitario": float(valor_final),
             "infoAdicional": f"SKU: {sku} (Origem ID: {produto_id_origem})"
         })
-    
+
     if missing_ids and retry_on_miss:
         logger.info(f"Found {len(missing_ids)} unmapped products, reloading from database...")
         await refresh_products_map()
         return await build_itens_dest_v3(itens_src, retry_on_miss=False)
-    
+
     for pid, sku in missing_ids:
         logger.warning(f"Produto ID {pid} (SKU: {sku}) não mapeado, pulando")
-    
-    logger.info(f"build_itens_dest_v3: mapeados={len(out)} de {len(itens_src)}")
-    return out
+
+    logger.info(f"build_itens_dest_v3: mapeados={len(out)} de {len(itens_src)}, missing={len(missing_ids)}")
+    return out, missing_ids
 
 
 def build_transportador_v3(
@@ -323,17 +327,38 @@ async def process_job(job: dict) -> None:
                     return
             
             external_key = f"A:{venda_id}"
-            snapshot = await get_order_a_snapshot(str(venda_id))
-            fetched_payload = snapshot.get('fetched_payload') if snapshot else None
-            
-            if fetched_payload and isinstance(fetched_payload, str):
-                fetched_payload = json.loads(fetched_payload)
-            
-            order_data = fetched_payload or {}
+
+            # Sempre busca dados frescos de A para evitar snapshot obsoleto
+            # (ex: CPF corrigido, endereço atualizado, etc.)
+            token_a_fresh = await ensure_access_token("A")
+            if token_a_fresh:
+                try:
+                    client_a_fresh = TinyClient(token_a_fresh)
+                    fresh_data = await call_tiny("A", client_a_fresh, "get_order_details", str(venda_id))
+                    await upsert_orders_a_fetched(venda_a_id=str(venda_id), fetched_payload=fresh_data)
+                    order_data = fresh_data
+                    logger.info(f"Job {job_id} create_order_c: refreshed snapshot from API for venda {venda_id}")
+                except TinyApiError as e:
+                    logger.warning(f"Job {job_id} create_order_c: fresh fetch failed ({e.status_code}), falling back to snapshot")
+                    order_data = None
+                except Exception as e:
+                    logger.warning(f"Job {job_id} create_order_c: fresh fetch error ({e}), falling back to snapshot")
+                    order_data = None
+            else:
+                logger.warning(f"Job {job_id} create_order_c: no token for A, falling back to snapshot")
+                order_data = None
+
+            # Fallback: se fetch fresco falhou, usa snapshot existente
+            if not order_data:
+                snapshot = await get_order_a_snapshot(str(venda_id))
+                fetched_payload = snapshot.get('fetched_payload') if snapshot else None
+                if fetched_payload and isinstance(fetched_payload, str):
+                    fetched_payload = json.loads(fetched_payload)
+                order_data = fetched_payload or {}
 
             if not order_data:
-                await update_job_failed(job_id, "fetched_payload missing, cannot verify deposit", attempts)
-                logger.warning(f"Job {job_id} failed: no fetched_payload for venda {venda_id}")
+                await update_job_failed(job_id, "fetched_payload missing and fresh fetch failed", attempts)
+                logger.warning(f"Job {job_id} failed: no data for venda {venda_id}")
                 return
 
             deposito = order_data.get('deposito') or {}
@@ -446,8 +471,21 @@ async def process_job(job: dict) -> None:
                     logger.error(f"Job {job_id} failed to create contact: {e}")
                     return
             
-            itens_c = await build_itens_dest_v3(itens_a)
-            
+            itens_c, missing_skus = await build_itens_dest_v3(itens_a)
+
+            if missing_skus:
+                for pid, sku in missing_skus:
+                    await upsert_partial_product(pid, sku)
+                await update_job_waiting_sku(job_id, {
+                    "would": "create_order_c",
+                    "venda_a_id": venda_id,
+                    "missing_skus": [{"id": pid, "sku": sku} for pid, sku in missing_skus],
+                    "mapped_count": len(itens_c),
+                    "total_count": len(itens_a),
+                })
+                logger.warning(f"Job {job_id} waiting_sku: {len(missing_skus)} unmapped SKUs for venda {venda_id}")
+                return
+
             if not itens_c:
                 await update_job_failed(job_id, "No products mapped from A to B (check products_map table)", attempts)
                 logger.warning(f"Job {job_id} failed: no products mapped")
@@ -490,10 +528,13 @@ async def process_job(job: dict) -> None:
                 obs_extra += f" | Frete: {forma_frete_src}"
             obs_extra += "]"
             
+            # numeroOrdemCompra recebe o numeroPedidoEcommerce de A (número da Shopify).
+            # Se não houver, fica vazio — para tornar perceptível visualmente quando algo
+            # deu errado (não fazemos fallback para numeroPedido).
             order_payload_c = {
                 "data": order_data.get('data'),
                 "idContato": id_contato_c,
-                "numeroOrdemCompra": str(order_data.get('numeroPedido') or ""),
+                "numeroOrdemCompra": str(numero_pedido_ecommerce or ""),
                 "itens": itens_c,
                 "enderecoEntrega": endereco_entrega,
                 "listaPreco": {"id": DEST1_PRICE_LIST_ID},
@@ -1019,17 +1060,27 @@ async def process_job(job: dict) -> None:
             codigo_rastreio = (transportador_c.get("codigoRastreamento") or "").strip()
             url_rastreio = (transportador_c.get("urlRastreamento") or "").strip()
 
-            if not codigo_rastreio and not url_rastreio:
+            if not codigo_rastreio:
+                # Delay progressivo: tentativas 0→1min, 1→1min, 2→1min, 3→2min, 4→3min
+                TRACKING_DELAYS = [1, 1, 1, 2, 3]
+                if attempts < len(TRACKING_DELAYS):
+                    delay = TRACKING_DELAYS[attempts]
+                    logger.info(f"Job {job_id} sync_tracking: C:{venda_c_id_str} sem código rastreio (tentativa {attempts+1}/{len(TRACKING_DELAYS)+1}), reagendando em {delay}min")
+                    await reschedule_job_with_backoff(job_id, attempts + 1, delay, "no_tracking_code_yet")
+                    return
+                # Esgotou tentativas — marca como done/skipped
                 action_preview = {
                     "would": "sync_tracking",
                     "skipped": True,
-                    "reason": "no_tracking_data",
+                    "reason": "no_tracking_code_after_retries",
                     "venda_c_id": venda_c_id_str,
                     "venda_a_id": venda_a_id_str,
-                    "note": "C está em pronto_envio mas transportador não tem rastreio ainda",
+                    "attempts": attempts,
+                    "url_rastreio": url_rastreio or None,
+                    "note": "Código de rastreio vazio após todas as tentativas",
                 }
                 await update_job_done(job_id, action_preview)
-                logger.warning(f"Job {job_id} sync_tracking: C:{venda_c_id_str} sem rastreio (codigo/url vazios)")
+                logger.warning(f"Job {job_id} sync_tracking: C:{venda_c_id_str} sem código rastreio após {attempts} tentativas")
                 return
 
             # 2) Atualiza rastreio em A via PUT /pedidos/{id}/despacho
@@ -1103,6 +1154,59 @@ async def process_job(job: dict) -> None:
             }
             await update_job_done(job_id, action_preview)
             logger.info(f"Job {job_id} completed: sync_tracking C:{venda_c_id_str} -> A:{venda_a_id_str} (codigo={codigo_rastreio}, status_updated={status_updated})")
+
+        elif job_type == 'update_numero_compra':
+            # Atualiza apenas o campo numeroOrdemCompra de um pedido existente em C
+            venda_c_id_str = payload.get('venda_c_id')
+            venda_a_id_str = payload.get('venda_a_id')
+            numero_pedido_ecommerce = payload.get('numero_pedido_ecommerce')
+
+            if not venda_c_id_str or not numero_pedido_ecommerce:
+                action_preview = {
+                    "would": "update_numero_compra",
+                    "skipped": True,
+                    "reason": "missing_venda_c_id_or_numero_ecommerce",
+                    "venda_c_id": venda_c_id_str,
+                    "venda_a_id": venda_a_id_str,
+                }
+                await update_job_done(job_id, action_preview)
+                logger.warning(f"Job {job_id} update_numero_compra skipped: missing data")
+                return
+
+            token_c = await ensure_access_token("B")
+            if not token_c:
+                await update_job_failed(job_id, "No valid OAuth token for B", attempts)
+                return
+
+            client_c = TinyClient(token_c)
+            try:
+                await call_tiny("B", client_c, "update_order", venda_c_id_str, {
+                    "numeroOrdemCompra": str(numero_pedido_ecommerce)
+                })
+            except TinyApiError as e:
+                # 404 = pedido não existe mais em C (foi deletado)
+                if e.status_code == 404:
+                    action_preview = {
+                        "would": "update_numero_compra",
+                        "skipped": True,
+                        "reason": "order_not_found_in_c",
+                        "venda_c_id": venda_c_id_str,
+                        "venda_a_id": venda_a_id_str,
+                    }
+                    await update_job_done(job_id, action_preview)
+                    logger.warning(f"Job {job_id} update_numero_compra: C:{venda_c_id_str} 404 not found")
+                    return
+                raise
+
+            action_preview = {
+                "would": "update_numero_compra",
+                "updated": True,
+                "venda_c_id": venda_c_id_str,
+                "venda_a_id": venda_a_id_str,
+                "numero_pedido_ecommerce": numero_pedido_ecommerce,
+            }
+            await update_job_done(job_id, action_preview)
+            logger.info(f"Job {job_id} update_numero_compra: C:{venda_c_id_str} ← {numero_pedido_ecommerce}")
 
         elif job_type == 'noop':
             action_preview = {
@@ -1243,6 +1347,12 @@ async def worker_loop():
     await maybe_refresh_tokens()
     
     while worker_running:
+        # Heartbeat: sinaliza ao /health que o worker está vivo
+        try:
+            await update_worker_heartbeat()
+        except Exception:
+            pass  # heartbeat nunca deve derrubar o loop
+
         import time as _time
         max_cooldown = 0
         for acct, until in _rate_limit_cooldown_until.items():

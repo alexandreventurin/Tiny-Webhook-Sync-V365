@@ -86,13 +86,13 @@ def determine_job_type(source: str, topic: str, codigo_situacao) -> str:
     if source == "A" and topic == "vendas":
         if status == "aprovado":
             return "fetch_order_a"
-        if status in ("enviado", "entregue", "cancelado"):
+        if status in ("cancelado",):
             return "sync_status"
-    
+
     if source == "B" and topic == "vendas":
         if status == "pronto_envio":
             return "sync_tracking_c_to_a"
-        if status in ("faturado", "cancelado"):
+        if status in ("faturado", "cancelado", "enviado", "entregue"):
             return "sync_status"
     
     if source == "B" and topic == "notas":

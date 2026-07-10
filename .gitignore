@@ -12,8 +12,12 @@ wheels/
 
 # Environment
 .env
+.fly-token
 
 # Cache
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Claude Code local (skills, scratch)
+.local/

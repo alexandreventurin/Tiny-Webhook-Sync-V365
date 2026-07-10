@@ -56,6 +56,32 @@ async def root():
     return {"status": "ok"}
 
 
+# Threshold: worker deve pulsar dentro dessa janela. Além disso = considerar travado.
+WORKER_HEARTBEAT_MAX_AGE_SECONDS = 30 * 60  # 30 minutos
+
+
+@app.get("/health")
+async def health():
+    """
+    Healthcheck usado pelo Fly.io para detectar worker travado.
+    - 200 OK: worker pulsou nas últimas 4h → tudo bem
+    - 500: heartbeat velho ou ausente → Fly reinicia a máquina automaticamente
+    """
+    from app.db import get_worker_heartbeat_age_seconds
+    age = await get_worker_heartbeat_age_seconds()
+    if age is None:
+        return JSONResponse(
+            {"ok": False, "reason": "no_heartbeat_yet", "threshold_seconds": WORKER_HEARTBEAT_MAX_AGE_SECONDS},
+            status_code=500,
+        )
+    if age > WORKER_HEARTBEAT_MAX_AGE_SECONDS:
+        return JSONResponse(
+            {"ok": False, "reason": "worker_stale", "heartbeat_age_seconds": age, "threshold_seconds": WORKER_HEARTBEAT_MAX_AGE_SECONDS},
+            status_code=500,
+        )
+    return {"ok": True, "heartbeat_age_seconds": round(age, 1), "threshold_seconds": WORKER_HEARTBEAT_MAX_AGE_SECONDS}
+
+
 async def process_webhook(request: Request, source: str, topic: str) -> JSONResponse:
     logger = logging.getLogger(__name__)
     raw_body = await request.body()
@@ -151,7 +177,9 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
             "id_nota_fiscal": id_nota_fiscal_str
         }
         
-        await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload, delay_minutes=0)
+        # sync_tracking_c_to_a: delay 1 min para dar tempo da transportadora popular o código de rastreio
+        initial_delay = 1 if job_type == "sync_tracking_c_to_a" else 0
+        await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload, delay_minutes=initial_delay)
         
         if event_id:
             await update_event_action_result(event_id, f"job:{job_type}")
@@ -305,6 +333,73 @@ async def admin_retry_failed_jobs(job_type: str = None):
         "failed_before": before,
         "failed_after": after
     }
+
+
+@app.post("/admin/jobs/retry-waiting-sku")
+async def admin_retry_waiting_sku():
+    from app.db import retry_waiting_sku_jobs
+    count = await retry_waiting_sku_jobs()
+    return {"ok": True, "requeued": count}
+
+
+@app.post("/admin/jobs/retry-tracking-skipped")
+async def admin_retry_tracking_skipped(days: int | None = None):
+    """
+    Recoloca na fila pedidos cujo sync de rastreio terminou sem código após retries.
+    Sem parâmetro `days` = reprocessa TODOS (escalonado em 10/min).
+    Com `days=N` = só dos últimos N dias.
+    """
+    from app.db import retry_tracking_skipped
+    if days is not None and (days < 1 or days > 365):
+        return {"ok": False, "error": "days deve estar entre 1 e 365 (ou omitido para todos)"}
+    count = await retry_tracking_skipped(days)
+    estimated_minutes = (count * 6) // 60
+    return {"ok": True, "requeued": count, "days": days, "estimated_duration_minutes": estimated_minutes, "rate": "10 jobs/min"}
+
+
+@app.get("/admin/jobs/fix-numero-compra-count")
+async def admin_fix_numero_compra_count():
+    """Quantos pedidos podem ser atualizados (sem disparar nada)."""
+    from app.db import count_numero_compra_candidates
+    counts = await count_numero_compra_candidates()
+    return {"ok": True, **counts}
+
+
+@app.post("/admin/jobs/fix-numero-compra")
+async def admin_fix_numero_compra(limit: int = 10):
+    """
+    Cria N jobs para atualizar numeroOrdemCompra em C com numeroPedidoEcommerce de A.
+    Safe: idempotente (não recria jobs já existentes). Recomenda-se começar com limit pequeno (ex: 10) para teste.
+    """
+    from app.db import create_numero_compra_fix_jobs
+    if limit < 1 or limit > 10000:
+        return {"ok": False, "error": "limit deve estar entre 1 e 10000"}
+    result = await create_numero_compra_fix_jobs(limit)
+    return {"ok": True, **result}
+
+
+@app.get("/admin/jobs/fix-numero-compra-report")
+async def admin_fix_numero_compra_report():
+    """Relatório do progresso do batch."""
+    from app.db import get_numero_compra_fix_report
+    report = await get_numero_compra_fix_report()
+    return {"ok": True, **report}
+
+
+@app.post("/admin/jobs/fix-empty-tracking")
+async def admin_fix_empty_tracking():
+    """Cria novos jobs escalonados para reprocessar tracking vazio. Safe: não altera jobs antigos."""
+    from app.db import create_tracking_fix_jobs
+    result = await create_tracking_fix_jobs()
+    return {"ok": True, **result}
+
+
+@app.get("/admin/jobs/tracking-fix-report")
+async def admin_tracking_fix_report():
+    """Relatório do progresso do batch de fix de tracking. João pode acompanhar aqui."""
+    from app.db import get_tracking_fix_report
+    report = await get_tracking_fix_report()
+    return {"ok": True, **report}
 
 
 @app.get("/admin/jobs/failed-count")

@@ -14,6 +14,17 @@ logger = logging.getLogger(__name__)
 
 SCOPES = "openid"
 
+# Headers realistas para passar pelo WAF/Cloudflare do accounts.tiny.com.br
+# A Tiny ativou proteção anti-bot que bloqueia httpx default por User-Agent.
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Origin": "https://accounts.tiny.com.br",
+    "Referer": "https://accounts.tiny.com.br/",
+}
+
 
 def get_credentials(account: str) -> tuple[str, str]:
     if account == "A":
@@ -56,11 +67,11 @@ async def exchange_code_for_tokens(account: str, code: str) -> dict:
     }
     
     logger.info(f"Token exchange for {account}: client_id={client_id[:30]}..., secret_len={len(client_secret)}, redirect_uri={redirect_uri}")
-    
+
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(url, data=data)
+        response = await client.post(url, data=data, headers=BROWSER_HEADERS)
         if response.status_code != 200:
-            logger.error(f"Token exchange failed: {response.status_code} - {response.text}")
+            logger.error(f"Token exchange failed: {response.status_code} - {response.text[:300]}")
         response.raise_for_status()
         return response.json()
 
@@ -77,7 +88,9 @@ async def refresh_access_token(account: str, refresh_token: str) -> dict:
     }
     
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(url, data=data)
+        response = await client.post(url, data=data, headers=BROWSER_HEADERS)
+        if response.status_code != 200:
+            logger.error(f"Refresh token failed for {account}: {response.status_code} - {response.text[:300]}")
         response.raise_for_status()
         return response.json()
 

@@ -1,5 +1,5 @@
 app = 'tiny-webhook-sync-v365'
-primary_region = 'gru'
+primary_region = 'iad'
 
 [build]
 
@@ -10,6 +10,16 @@ primary_region = 'gru'
   auto_start_machines = true
   min_machines_running = 1
   processes = ['app']
+
+# Healthcheck: bate no /health a cada 60s. Se falhar 3x seguidas (~3 min),
+# o Fly reinicia a máquina automaticamente. O /health retorna 500 se o worker
+# não pulsar há mais de 4h — auto-recovery para o cenário "worker travou".
+[[http_service.checks]]
+  interval = "60s"
+  timeout = "10s"
+  grace_period = "60s"
+  method = "GET"
+  path = "/health"
 
 [[vm]]
   memory = '256mb'

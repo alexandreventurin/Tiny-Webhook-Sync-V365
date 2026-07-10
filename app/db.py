@@ -187,13 +187,12 @@ async def init_db():
             await conn.execute("""
                 UPDATE public.products_map SET preco = CASE sku
                     WHEN 'Rosto-5' THEN 19.55
-                    WHEN 'Rosto-5too' THEN 19.55
                     WHEN 'Te' THEN 18.50
                     WHEN 'Pescoco' THEN 9.65
                     WHEN 'Rosto-1t' THEN 12.25
                     WHEN 'Rosto-2o' THEN 12.25
                 END
-                WHERE sku IN ('Rosto-5', 'Rosto-5too', 'Te', 'Pescoco', 'Rosto-1t', 'Rosto-2o') AND preco IS NULL
+                WHERE sku IN ('Rosto-5', 'Te', 'Pescoco', 'Rosto-1t', 'Rosto-2o') AND preco IS NULL
             """)
 
             await conn.execute("""
@@ -210,7 +209,7 @@ async def init_db():
                 await conn.execute("ALTER TABLE public.jobs DROP CONSTRAINT IF EXISTS jobs_job_type_check")
                 await conn.execute("""
                     ALTER TABLE public.jobs ADD CONSTRAINT jobs_job_type_check
-                    CHECK (job_type = ANY (ARRAY['noop','create_order_c','sync_status','fetch_label','fetch_nf_link','sync_nf_link','fetch_order_a','add_tag_c','add_tag_a','sync_tracking_c_to_a']))
+                    CHECK (job_type = ANY (ARRAY['noop','create_order_c','sync_status','fetch_label','fetch_nf_link','sync_nf_link','fetch_order_a','add_tag_c','add_tag_a','sync_tracking_c_to_a','update_numero_compra']))
                 """)
             except Exception:
                 pass
@@ -263,6 +262,22 @@ async def init_db():
 
             try:
                 await conn.execute("ALTER TABLE public.import_run_items ADD COLUMN IF NOT EXISTS motivo TEXT")
+            except Exception:
+                pass
+
+            # Heartbeat do worker — usado pelo /health para detectar worker travado
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS public.worker_heartbeat (
+                    id INT PRIMARY KEY DEFAULT 1,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            await conn.execute("""
+                INSERT INTO public.worker_heartbeat (id, updated_at) VALUES (1, NOW())
+                ON CONFLICT (id) DO NOTHING
+            """)
+            try:
+                await conn.execute("ALTER TABLE public.worker_heartbeat ENABLE ROW LEVEL SECURITY")
             except Exception:
                 pass
 
@@ -443,6 +458,110 @@ async def update_job_skipped_not_mapped(job_id, action_preview: dict) -> None:
                 """, job_id)
             except Exception as e2:
                 logger.error(f"Failed to update job skipped_not_mapped: {e2}")
+
+
+async def update_job_waiting_sku(job_id, action_preview: dict) -> None:
+    p = await get_pool()
+    action_preview_str = json.dumps(action_preview)
+    async with p.acquire() as conn:
+        try:
+            await conn.execute("""
+                UPDATE public.jobs
+                SET status = 'waiting_sku', action_preview = $2::jsonb, locked_at = NULL, locked_by = NULL, updated_at = NOW()
+                WHERE id = $1
+            """, job_id, action_preview_str)
+        except Exception as e1:
+            logger.warning(f"update_job_waiting_sku primary failed for {job_id}: {e1}")
+            try:
+                await conn.execute("""
+                    UPDATE public.jobs
+                    SET status = 'waiting_sku', locked_at = NULL, locked_by = NULL, updated_at = NOW()
+                    WHERE id = $1
+                """, job_id)
+            except Exception as e2:
+                logger.error(f"Failed to update job waiting_sku: {e2}")
+
+
+async def count_tracking_skipped_recent(days: int | None = None) -> int:
+    """Quantos sync_tracking_c_to_a foram skipped por falta de código.
+    Se days=None, conta todos. Senão, só dos últimos N dias."""
+    p = await get_pool()
+    async with p.acquire() as conn:
+        if days is None:
+            count = await conn.fetchval("""
+                SELECT COUNT(*) FROM public.jobs
+                WHERE job_type = 'sync_tracking_c_to_a'
+                  AND status = 'done'
+                  AND action_preview::jsonb->>'reason' = 'no_tracking_code_after_retries'
+            """)
+        else:
+            count = await conn.fetchval(f"""
+                SELECT COUNT(*) FROM public.jobs
+                WHERE job_type = 'sync_tracking_c_to_a'
+                  AND status = 'done'
+                  AND action_preview::jsonb->>'reason' = 'no_tracking_code_after_retries'
+                  AND updated_at >= NOW() - INTERVAL '{int(days)} days'
+            """)
+        return count or 0
+
+
+async def retry_tracking_skipped(days: int | None = None) -> int:
+    """
+    Recoloca na fila jobs sync_tracking_c_to_a marcados como skipped (sem código).
+    Se days=None, pega TODOS. Senão, só dos últimos N dias.
+    Escalona run_after (10 jobs/min) para não sobrecarregar a API.
+    """
+    p = await get_pool()
+    async with p.acquire() as conn:
+        if days is None:
+            where_clause = """
+                job_type = 'sync_tracking_c_to_a'
+                  AND status = 'done'
+                  AND action_preview::jsonb->>'reason' = 'no_tracking_code_after_retries'
+            """
+        else:
+            where_clause = f"""
+                job_type = 'sync_tracking_c_to_a'
+                  AND status = 'done'
+                  AND action_preview::jsonb->>'reason' = 'no_tracking_code_after_retries'
+                  AND updated_at >= NOW() - INTERVAL '{int(days)} days'
+            """
+        # Atualiza com run_after escalonado (6 segundos entre cada = 10/min)
+        # ORDER BY updated_at DESC garante que os mais recentes processam primeiro
+        result = await conn.execute(f"""
+            WITH ordered AS (
+                SELECT id, ROW_NUMBER() OVER (ORDER BY updated_at DESC) - 1 as seq
+                FROM public.jobs
+                WHERE {where_clause}
+            )
+            UPDATE public.jobs j
+            SET status = 'queued',
+                attempts = 0,
+                action_preview = NULL,
+                last_error = NULL,
+                locked_at = NULL,
+                locked_by = NULL,
+                run_after = NOW() + (ordered.seq * 6 || ' seconds')::interval,
+                updated_at = NOW()
+            FROM ordered
+            WHERE j.id = ordered.id
+        """)
+        count = int(result.split()[-1]) if result else 0
+        logger.info(f"retry_tracking_skipped: requeued {count} jobs (days={days})")
+        return count
+
+
+async def retry_waiting_sku_jobs() -> int:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE public.jobs
+            SET status = 'queued', locked_at = NULL, locked_by = NULL, run_after = NULL, updated_at = NOW()
+            WHERE status = 'waiting_sku'
+        """)
+        count = int(result.split()[-1]) if result else 0
+        logger.info(f"retry_waiting_sku_jobs: requeued {count} jobs")
+        return count
 
 
 async def update_job_failed(job_id, error: str, attempts: int) -> None:
@@ -798,6 +917,20 @@ async def count_orders_replicated_to_c() -> int:
         return row['cnt'] if row else 0
 
 
+async def upsert_partial_product(id_a: int, sku: str) -> None:
+    """Insere linha parcial em products_map (id_c=NULL, ativo=false) se não existir."""
+    p = await get_pool()
+    async with p.acquire() as conn:
+        try:
+            await conn.execute("""
+                INSERT INTO public.products_map (id_a, sku, id_c, ativo, updated_at)
+                VALUES ($1, $2, NULL, false, NOW())
+                ON CONFLICT (id_a) DO NOTHING
+            """, id_a, sku)
+        except Exception as e:
+            logger.warning(f"upsert_partial_product({id_a}, {sku}): {e}")
+
+
 async def load_products_map() -> dict[int, int]:
     """Carrega mapeamento de produtos A -> C da tabela products_map."""
     p = await get_pool()
@@ -934,7 +1067,7 @@ async def get_dashboard_data() -> dict:
         """)
 
         job_counts = {}
-        for status in ['queued', 'running', 'done', 'failed', 'dead']:
+        for status in ['queued', 'running', 'done', 'failed', 'dead', 'waiting_sku']:
             job_counts[status] = await conn.fetchval(
                 "SELECT COUNT(*) FROM public.jobs WHERE status = $1", status
             )
@@ -960,6 +1093,19 @@ async def get_dashboard_data() -> dict:
             SELECT COUNT(*) FROM public.orders_map WHERE venda_c_id IS NOT NULL
         """)
 
+        # Sync de rastreio sem código (candidatos a reprocessar) — total all-time
+        tracking_skipped_recent = await conn.fetchval("""
+            SELECT COUNT(*) FROM public.jobs
+            WHERE job_type = 'sync_tracking_c_to_a'
+              AND status = 'done'
+              AND action_preview::jsonb->>'reason' = 'no_tracking_code_after_retries'
+        """)
+
+        # Idade do heartbeat do worker (segundos desde último pulso)
+        worker_heartbeat_age = await conn.fetchval(
+            "SELECT EXTRACT(EPOCH FROM (NOW() - updated_at)) FROM public.worker_heartbeat WHERE id = 1"
+        )
+
         return {
             "events_total": events_total,
             "last_event": dict(last_event) if last_event else None,
@@ -968,6 +1114,8 @@ async def get_dashboard_data() -> dict:
             "today_failed": today_failed,
             "recent_jobs": [dict(r) for r in recent_jobs],
             "orders_replicated": replicated,
+            "tracking_skipped_recent": tracking_skipped_recent or 0,
+            "worker_heartbeat_age_seconds": float(worker_heartbeat_age) if worker_heartbeat_age is not None else None,
         }
 
 
@@ -1193,6 +1341,331 @@ async def has_running_import() -> bool:
             "SELECT 1 FROM public.import_runs WHERE status = 'running'"
         )
         return row is not None
+
+
+async def create_tracking_fix_jobs() -> dict:
+    """
+    Cria novos jobs para reprocessar sync_tracking_c_to_a que escreveram código vazio.
+    Usa INSERT em batch (único SQL) para evitar timeout.
+    Escalonados: 10 jobs por minuto (1 a cada 6 segundos) para respeitar rate limits.
+    """
+    p = await get_pool()
+    async with p.acquire() as conn:
+        # Faz tudo em um único SQL: seleciona afetados e insere jobs escalonados
+        result = await conn.execute("""
+            WITH affected AS (
+                SELECT DISTINCT ON (payload::jsonb->>'venda_id')
+                    id as original_job_id,
+                    payload::jsonb->>'venda_id' as venda_c_id,
+                    ROW_NUMBER() OVER (ORDER BY payload::jsonb->>'venda_id') - 1 as seq
+                FROM public.jobs
+                WHERE job_type = 'sync_tracking_c_to_a'
+                  AND status = 'done'
+                  AND (action_preview::jsonb->>'skipped' IS NULL OR action_preview::jsonb->>'skipped' = 'false')
+                  AND (action_preview::jsonb->>'codigo_rastreamento' IS NULL OR action_preview::jsonb->>'codigo_rastreamento' = '')
+                  AND payload::jsonb->>'venda_id' IS NOT NULL
+                ORDER BY payload::jsonb->>'venda_id', created_at DESC
+            )
+            INSERT INTO public.jobs (job_type, dedupe_key, status, payload, run_after)
+            SELECT
+                'sync_tracking_c_to_a',
+                'tracking_fix:' || venda_c_id,
+                'queued',
+                jsonb_build_object(
+                    'source', 'B',
+                    'topic', 'vendas',
+                    'venda_id', venda_c_id,
+                    'codigo_situacao', '7',
+                    'reprocess', 'tracking_fix_20260508',
+                    'original_job_id', original_job_id
+                ),
+                NOW() + (seq * 6 || ' seconds')::interval
+            FROM affected
+            ON CONFLICT (dedupe_key) DO NOTHING
+        """)
+        created = int(result.split()[-1]) if result else 0
+
+        # Conta total de afetados para o relatório
+        total = await conn.fetchval("""
+            SELECT COUNT(DISTINCT payload::jsonb->>'venda_id')
+            FROM public.jobs
+            WHERE job_type = 'sync_tracking_c_to_a'
+              AND status = 'done'
+              AND (action_preview::jsonb->>'skipped' IS NULL OR action_preview::jsonb->>'skipped' = 'false')
+              AND (action_preview::jsonb->>'codigo_rastreamento' IS NULL OR action_preview::jsonb->>'codigo_rastreamento' = '')
+        """)
+
+        estimated_minutes = (created * 6) // 60
+        logger.info(f"Tracking fix: created={created}, total_affected={total}, estimated={estimated_minutes}min")
+        return {
+            "created": created,
+            "skipped_duplicates": total - created if total else 0,
+            "total_affected": total,
+            "estimated_duration_minutes": estimated_minutes,
+            "rate": "10 jobs/min",
+        }
+
+
+async def get_tracking_fix_report() -> dict:
+    """
+    Relatório dos jobs do batch tracking_fix para verificação.
+    Retorna contagens + lista de pedidos com resultado.
+    """
+    p = await get_pool()
+    async with p.acquire() as conn:
+        # Contagem por status
+        summary = await conn.fetch("""
+            SELECT
+                status,
+                COUNT(*) as count
+            FROM public.jobs
+            WHERE dedupe_key LIKE 'tracking_fix:%'
+            GROUP BY status
+            ORDER BY count DESC
+        """)
+
+        # Detalhes dos concluídos (com e sem código)
+        done_jobs = await conn.fetch("""
+            SELECT
+                id,
+                payload::jsonb->>'venda_id' as venda_c_id,
+                action_preview::jsonb->>'venda_a_id' as venda_a_id,
+                action_preview::jsonb->>'codigo_rastreamento' as codigo_rastreamento,
+                action_preview::jsonb->>'url_rastreamento' as url_rastreamento,
+                action_preview::jsonb->>'skipped' as skipped,
+                action_preview::jsonb->>'reason' as reason,
+                action_preview::jsonb->>'status_updated' as status_updated,
+                updated_at
+            FROM public.jobs
+            WHERE dedupe_key LIKE 'tracking_fix:%'
+              AND status = 'done'
+            ORDER BY updated_at DESC
+        """)
+
+        # Separar sucesso vs falha
+        success = []
+        still_empty = []
+        skipped_list = []
+        for r in done_jobs:
+            item = {
+                "job_id": r['id'],
+                "venda_c_id": r['venda_c_id'],
+                "venda_a_id": r['venda_a_id'],
+                "codigo_rastreamento": r['codigo_rastreamento'] or "",
+                "updated_at": r['updated_at'].isoformat() if r['updated_at'] else None,
+            }
+            if r['skipped'] == 'true':
+                item["reason"] = r['reason']
+                skipped_list.append(item)
+            elif r['codigo_rastreamento']:
+                success.append(item)
+            else:
+                still_empty.append(item)
+
+        # Jobs pendentes
+        pending = await conn.fetchval("""
+            SELECT COUNT(*) FROM public.jobs
+            WHERE dedupe_key LIKE 'tracking_fix:%'
+              AND status IN ('queued', 'running')
+        """)
+
+        failed = await conn.fetchval("""
+            SELECT COUNT(*) FROM public.jobs
+            WHERE dedupe_key LIKE 'tracking_fix:%'
+              AND status = 'failed'
+        """)
+
+        return {
+            "summary": {s['status']: s['count'] for s in summary},
+            "pending": pending,
+            "failed": failed,
+            "success_count": len(success),
+            "still_empty_count": len(still_empty),
+            "skipped_count": len(skipped_list),
+            "success_sample": success[:20],
+            "still_empty_sample": still_empty[:20],
+            "skipped_sample": skipped_list[:20],
+        }
+
+
+async def count_numero_compra_candidates() -> dict:
+    """Conta quantos pedidos podem ter o numeroOrdemCompra atualizado."""
+    p = await get_pool()
+    async with p.acquire() as conn:
+        total_eligible = await conn.fetchval("""
+            SELECT COUNT(*)
+            FROM public.orders_map om
+            JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
+            WHERE om.venda_c_id IS NOT NULL
+              AND oas.fetched_payload::jsonb->'ecommerce'->>'numeroPedidoEcommerce' IS NOT NULL
+              AND oas.fetched_payload::jsonb->'ecommerce'->>'numeroPedidoEcommerce' != ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM public.jobs j
+                  WHERE j.dedupe_key = 'update_numero_compra:' || om.venda_c_id::text
+              )
+        """)
+        already_queued_or_done = await conn.fetchval("""
+            SELECT COUNT(*) FROM public.jobs
+            WHERE job_type = 'update_numero_compra'
+        """)
+        return {
+            "eligible_remaining": total_eligible,
+            "jobs_already_created": already_queued_or_done,
+        }
+
+
+async def create_numero_compra_fix_jobs(limit: int) -> dict:
+    """
+    Cria jobs para atualizar numeroOrdemCompra em C com o numeroPedidoEcommerce de A.
+    Escalonados: 10 jobs por minuto (1 a cada 6 segundos).
+    Não recria jobs já existentes (idempotente).
+    """
+    p = await get_pool()
+    async with p.acquire() as conn:
+        result = await conn.execute("""
+            WITH candidates AS (
+                SELECT
+                    om.venda_a_id,
+                    om.venda_c_id,
+                    oas.fetched_payload::jsonb->'ecommerce'->>'numeroPedidoEcommerce' as nro_ecom,
+                    ROW_NUMBER() OVER (ORDER BY om.venda_c_id DESC) - 1 as seq
+                FROM public.orders_map om
+                JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
+                WHERE om.venda_c_id IS NOT NULL
+                  AND oas.fetched_payload::jsonb->'ecommerce'->>'numeroPedidoEcommerce' IS NOT NULL
+                  AND oas.fetched_payload::jsonb->'ecommerce'->>'numeroPedidoEcommerce' != ''
+                  AND NOT EXISTS (
+                      SELECT 1 FROM public.jobs j
+                      WHERE j.dedupe_key = 'update_numero_compra:' || om.venda_c_id::text
+                  )
+                ORDER BY om.venda_c_id DESC
+                LIMIT $1
+            )
+            INSERT INTO public.jobs (job_type, dedupe_key, status, payload, run_after)
+            SELECT
+                'update_numero_compra',
+                'update_numero_compra:' || venda_c_id::text,
+                'queued',
+                jsonb_build_object(
+                    'venda_a_id', venda_a_id::text,
+                    'venda_c_id', venda_c_id::text,
+                    'numero_pedido_ecommerce', nro_ecom,
+                    'batch', 'numero_compra_fix_20260518'
+                ),
+                NOW() + (seq * 6 || ' seconds')::interval
+            FROM candidates
+            ON CONFLICT (dedupe_key) DO NOTHING
+        """, limit)
+        created = int(result.split()[-1]) if result else 0
+
+        # Remaining após criação
+        remaining = await conn.fetchval("""
+            SELECT COUNT(*)
+            FROM public.orders_map om
+            JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
+            WHERE om.venda_c_id IS NOT NULL
+              AND oas.fetched_payload::jsonb->'ecommerce'->>'numeroPedidoEcommerce' IS NOT NULL
+              AND oas.fetched_payload::jsonb->'ecommerce'->>'numeroPedidoEcommerce' != ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM public.jobs j
+                  WHERE j.dedupe_key = 'update_numero_compra:' || om.venda_c_id::text
+              )
+        """)
+
+        estimated_minutes = (created * 6) // 60
+        logger.info(f"Numero compra fix: created={created}, remaining_after={remaining}, estimated={estimated_minutes}min")
+        return {
+            "created": created,
+            "remaining_to_create": remaining,
+            "estimated_duration_minutes": estimated_minutes,
+            "rate": "10 jobs/min",
+        }
+
+
+async def get_numero_compra_fix_report() -> dict:
+    """Relatório do progresso do batch de fix de numeroOrdemCompra."""
+    p = await get_pool()
+    async with p.acquire() as conn:
+        summary = await conn.fetch("""
+            SELECT status, COUNT(*) as count
+            FROM public.jobs
+            WHERE job_type = 'update_numero_compra'
+            GROUP BY status
+            ORDER BY count DESC
+        """)
+
+        done_jobs = await conn.fetch("""
+            SELECT
+                id,
+                payload::jsonb->>'venda_c_id' as venda_c_id,
+                payload::jsonb->>'venda_a_id' as venda_a_id,
+                payload::jsonb->>'numero_pedido_ecommerce' as nro_ecom,
+                action_preview::jsonb->>'skipped' as skipped,
+                action_preview::jsonb->>'reason' as reason,
+                updated_at
+            FROM public.jobs
+            WHERE job_type = 'update_numero_compra' AND status = 'done'
+            ORDER BY updated_at DESC
+        """)
+
+        success = []
+        skipped_list = []
+        for r in done_jobs:
+            item = {
+                "job_id": r['id'],
+                "venda_c_id": r['venda_c_id'],
+                "venda_a_id": r['venda_a_id'],
+                "numero_pedido_ecommerce": r['nro_ecom'],
+                "updated_at": r['updated_at'].isoformat() if r['updated_at'] else None,
+            }
+            if r['skipped'] == 'true':
+                item["reason"] = r['reason']
+                skipped_list.append(item)
+            else:
+                success.append(item)
+
+        pending = await conn.fetchval("""
+            SELECT COUNT(*) FROM public.jobs
+            WHERE job_type = 'update_numero_compra' AND status IN ('queued', 'running')
+        """)
+        failed = await conn.fetchval("""
+            SELECT COUNT(*) FROM public.jobs
+            WHERE job_type = 'update_numero_compra' AND status = 'failed'
+        """)
+
+        return {
+            "summary": {s['status']: s['count'] for s in summary},
+            "pending": pending,
+            "failed": failed,
+            "success_count": len(success),
+            "skipped_count": len(skipped_list),
+            "success_sample": success[:20],
+            "skipped_sample": skipped_list[:20],
+        }
+
+
+async def update_worker_heartbeat() -> None:
+    """Atualiza timestamp do heartbeat do worker. Usado pelo /health para detectar worker travado."""
+    p = await get_pool()
+    async with p.acquire() as conn:
+        try:
+            await conn.execute("UPDATE public.worker_heartbeat SET updated_at = NOW() WHERE id = 1")
+        except Exception as e:
+            logger.error(f"Failed to update worker heartbeat: {e}")
+
+
+async def get_worker_heartbeat_age_seconds() -> float | None:
+    """Retorna quantos segundos se passaram desde o último heartbeat. None se nunca teve heartbeat."""
+    p = await get_pool()
+    async with p.acquire() as conn:
+        try:
+            age = await conn.fetchval(
+                "SELECT EXTRACT(EPOCH FROM (NOW() - updated_at)) FROM public.worker_heartbeat WHERE id = 1"
+            )
+            return float(age) if age is not None else None
+        except Exception as e:
+            logger.error(f"Failed to read worker heartbeat: {e}")
+            return None
 
 
 async def recover_stale_import_runs() -> int:

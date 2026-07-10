@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pedidos - Tiny Integrator</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f4f6f8;color:#172033;min-height:100vh}
+.topbar{height:58px;background:#172033;color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 22px;border-bottom:1px solid #0f172a}
+.brand{display:flex;align-items:baseline;gap:12px}.brand h1{margin:0;font-size:17px;font-weight:700}.brand span{font-size:12px;color:#9fb0c5}
+.nav{display:flex;align-items:center;gap:10px}.nav a,.nav button{border:0;background:#26364a;color:#dbe7f5;border-radius:6px;padding:8px 11px;text-decoration:none;font-size:13px;cursor:pointer}.nav button:hover,.nav a:hover{background:#334a65;color:#fff}
+.wrap{max-width:1380px;margin:0 auto;padding:18px}
+.toolbar{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;margin-bottom:14px}.search{height:40px;border:1px solid #cbd5e1;border-radius:6px;padding:0 12px;font-size:14px;background:#fff}.actions{display:flex;gap:8px}.actions button{height:40px;border:1px solid #b6c2d1;background:#fff;border-radius:6px;padding:0 12px;font-size:13px;cursor:pointer;color:#26364a}.actions button:hover{background:#eef4fb}
+.tabs{display:flex;gap:6px;border-bottom:1px solid #cbd5e1;margin-bottom:12px;overflow:auto}.tab{border:0;background:transparent;color:#536274;padding:12px 14px;font-size:14px;font-weight:700;cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap}.tab.active{color:#10243e;border-bottom-color:#2563eb}
+.subtabs{display:flex;gap:8px;align-items:center;margin:0 0 12px;overflow:auto}.subtab{height:32px;border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:0 10px;font-size:12px;font-weight:700;color:#536274;cursor:pointer;white-space:nowrap}.subtab.active{background:#1f3a5f;color:#fff;border-color:#1f3a5f}
+.summary{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px;margin-bottom:14px}.metric{background:#fff;border:1px solid #d9e1ea;border-radius:8px;padding:12px}.metric .value{font-size:25px;font-weight:800;color:#172033}.metric .label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#6b7b8d;margin-top:3px}
+.panel{background:#fff;border:1px solid #d9e1ea;border-radius:8px;overflow:hidden}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:13px}th{background:#f8fafc;color:#6b7b8d;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:10px;border-bottom:1px solid #d9e1ea;white-space:nowrap}td{padding:11px 10px;border-bottom:1px solid #eef2f6;vertical-align:top}tbody tr{cursor:pointer}tbody tr:hover td{background:#f8fbff}
+.badge{display:inline-flex;align-items:center;min-height:22px;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap}.ok{background:#dcfce7;color:#166534}.warn{background:#fff7ed;color:#c2410c}.bad{background:#fee2e2;color:#b91c1c}.info{background:#dbeafe;color:#1d4ed8}.muted{background:#eef2f7;color:#536274}
+.reason{display:flex;gap:5px;flex-wrap:wrap}.empty{padding:36px;text-align:center;color:#7a899a;font-size:14px}.small{font-size:12px;color:#6b7b8d}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.drawer-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.3);display:none}.drawer-backdrop.open{display:block}.drawer{position:fixed;top:0;right:0;width:min(960px,100vw);height:100vh;background:#fff;box-shadow:-16px 0 50px rgba(15,23,42,.22);display:flex;flex-direction:column;transform:translateX(100%);transition:transform .2s ease}.drawer.open{transform:translateX(0)}
+.drawer-head{height:58px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #d9e1ea;padding:0 16px}.drawer-head h2{font-size:16px;margin:0}.drawer-head button{border:1px solid #cbd5e1;background:#fff;border-radius:6px;height:34px;width:38px;font-size:20px;cursor:pointer;color:#334155}
+.drawer-body{overflow:auto;padding:14px}.compare{display:grid;grid-template-columns:1fr 1fr;gap:12px}.box{border:1px solid #d9e1ea;border-radius:8px;overflow:hidden;background:#fbfdff}.box h3{margin:0;padding:10px 12px;font-size:13px;background:#f8fafc;border-bottom:1px solid #d9e1ea}.fields{padding:8px 12px;display:grid;gap:8px}.field{display:grid;grid-template-columns:150px 1fr;gap:8px;font-size:13px}.field label{color:#6b7b8d;font-size:12px}.diffs{margin-top:12px;border:1px solid #fed7aa;background:#fff7ed;border-radius:8px;overflow:hidden}.diffs h3{margin:0;padding:10px 12px;font-size:13px;border-bottom:1px solid #fed7aa}.diff-row{display:grid;grid-template-columns:150px 1fr 1fr;gap:10px;padding:10px 12px;border-bottom:1px solid #ffedd5;font-size:12px}.diff-row:last-child{border-bottom:0}.pre{white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;max-height:280px;overflow:auto;background:#0f172a;color:#dbeafe;border-radius:6px;padding:10px}
+.loading{opacity:.55;pointer-events:none}
+@media(max-width:760px){.topbar{height:auto;gap:10px;align-items:flex-start;flex-direction:column;padding:14px}.toolbar{grid-template-columns:1fr}.summary{grid-template-columns:repeat(2,1fr)}.compare{grid-template-columns:1fr}.field,.diff-row{grid-template-columns:1fr}.wrap{padding:12px}th:nth-child(4),td:nth-child(4){display:none}}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><h1>Gestão de Pedidos</h1><span>Tiny Integrator</span></div>
+  <nav class="nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/import">Importação</a>
+    <button id="refreshBtn">Atualizar</button>
+    <a href="/logout">Sair</a>
+  </nav>
+</header>
+<main class="wrap">
+  <section class="toolbar">
+    <input id="search" class="search" placeholder="Pesquisar por pedido, cliente, CPF/CNPJ, status ou ID">
+    <div class="actions">
+      <button id="clearBtn">Limpar</button>
+    </div>
+  </section>
+  <section class="summary" id="summary"></section>
+  <section class="tabs">
+    <button class="tab active" data-tab="origin">Pedidos na origem</button>
+    <button class="tab" data-tab="synced">Pedidos sincronizados</button>
+    <button class="tab" data-tab="errors">Tentativas com erro</button>
+  </section>
+  <section class="subtabs" id="subtabs"></section>
+  <section class="panel">
+    <div class="table-wrap" id="tableWrap"></div>
+  </section>
+</main>
+<div class="drawer-backdrop" id="backdrop"></div>
+<aside class="drawer" id="drawer">
+  <div class="drawer-head">
+    <h2 id="drawerTitle">Pedido</h2>
+    <button id="closeDrawer" aria-label="Fechar">×</button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+</aside>
+<script>
+const state={tab:'origin',subtab:'valid',query:'',data:null};
+const $=id=>document.getElementById(id);
+const fmt=v=>v===null||v===undefined||v===''?'—':String(v);
+const date=v=>v?new Date(v).toLocaleString('pt-BR'):'—';
+const esc=v=>String(fmt(v)).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const textOf=o=>JSON.stringify(o||{}).toLowerCase();
+
+function badge(label,type='muted'){return `<span class="badge ${type}">${esc(label)}</span>`}
+function matches(item){return !state.query||textOf(item).includes(state.query.toLowerCase())}
+
+async function load(){
+  document.body.classList.add('loading');
+  const res=await fetch('/admin/orders-panel/data?limit=160');
+  if(res.status===401){location.href='/login?next=/orders-panel';return}
+  state.data=await res.json();
+  document.body.classList.remove('loading');
+  render();
+}
+
+function render(){
+  renderSummary();
+  renderSubtabs();
+  renderTable();
+}
+
+function renderSummary(){
+  const d=state.data||{origin:{valid:[],invalid:[]},synced:[],errors:[]};
+  $('summary').innerHTML=[
+    ['Válidos para exportação',d.origin.valid.length],
+    ['Não aceitos',d.origin.invalid.length],
+    ['Sincronizados',d.synced.length],
+    ['Com erro',d.errors.length],
+  ].map(([label,value])=>`<div class="metric"><div class="value">${value}</div><div class="label">${label}</div></div>`).join('');
+}
+
+function renderSubtabs(){
+  const d=state.data||{origin:{valid:[],invalid:[]},synced:[],errors:[]};
+  if(state.tab==='origin'){
+    const items=[['valid','Válidos para exportação',d.origin.valid.length],['invalid','Não aceitos',d.origin.invalid.length]];
+    $('subtabs').innerHTML=items.map(([key,label,count])=>`<button class="subtab ${state.subtab===key?'active':''}" data-subtab="${key}">${label} (${count})</button>`).join('');
+  }else if(state.tab==='synced'){
+    const statuses=[...new Set(d.synced.map(x=>x.situacao_a||x.last_sync_status||'sem status'))].sort();
+    if(!statuses.includes(state.subtab)&&state.subtab!=='all')state.subtab='all';
+    $('subtabs').innerHTML=[`<button class="subtab ${state.subtab==='all'?'active':''}" data-subtab="all">Todos (${d.synced.length})</button>`]
+      .concat(statuses.map(s=>`<button class="subtab ${state.subtab===s?'active':''}" data-subtab="${esc(s)}">${esc(s)} (${d.synced.filter(x=>(x.situacao_a||x.last_sync_status||'sem status')===s).length})</button>`)).join('');
+  }else{
+    const statuses=[...new Set(d.errors.map(x=>x.status||'erro'))].sort();
+    if(!statuses.includes(state.subtab)&&state.subtab!=='all')state.subtab='all';
+    $('subtabs').innerHTML=[`<button class="subtab ${state.subtab==='all'?'active':''}" data-subtab="all">Todos (${d.errors.length})</button>`]
+      .concat(statuses.map(s=>`<button class="subtab ${state.subtab===s?'active':''}" data-subtab="${esc(s)}">${esc(s)} (${d.errors.filter(x=>(x.status||'erro')===s).length})</button>`)).join('');
+  }
+  document.querySelectorAll('.subtab').forEach(b=>b.onclick=()=>{state.subtab=b.dataset.subtab;renderTable();renderSubtabs()});
+}
+
+function table(headers,rows){
+  if(!rows.length)return '<div class="empty">Nenhum pedido encontrado.</div>';
+  return `<table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`;
+}
+
+function renderTable(){
+  const d=state.data||{origin:{valid:[],invalid:[]},synced:[],errors:[]};
+  if(state.tab==='origin'){
+    const list=(state.subtab==='invalid'?d.origin.invalid:d.origin.valid).filter(matches);
+    $('tableWrap').innerHTML=table(['Pedido','Cliente','Situação','Entrega','Itens','Motivos'],list.map(x=>`
+      <tr data-a="${esc(x.venda_a_id)}">
+        <td><strong>${esc(x.numero||x.venda_a_id)}</strong><div class="small mono">A ${esc(x.venda_a_id)}</div></td>
+        <td>${esc(x.cliente)}<div class="small">${esc(x.cpf_cnpj)}</div></td>
+        <td>${badge(x.situacao||'sem status',x.valid_for_export?'ok':'warn')}</td>
+        <td>${esc([x.cidade,x.uf].filter(Boolean).join(' / '))}</td>
+        <td>${esc(x.itens)}</td>
+        <td><div class="reason">${x.reasons.length?x.reasons.map(r=>badge(r,'warn')).join(''):badge('pronto','ok')}</div></td>
+      </tr>`));
+    document.querySelectorAll('tr[data-a]').forEach(r=>r.onclick=()=>openDetail({a:r.dataset.a}));
+  }else if(state.tab==='synced'){
+    let list=d.synced.filter(matches);
+    if(state.subtab!=='all')list=list.filter(x=>(x.situacao_a||x.last_sync_status||'sem status')===state.subtab);
+    $('tableWrap').innerHTML=table(['Origem','Destino','Cliente','Situação em A','Última sincronização','Job'],list.map(x=>`
+      <tr data-a="${esc(x.venda_a_id)}" data-c="${esc(x.venda_c_id)}">
+        <td><strong>${esc(x.numero||x.venda_a_id)}</strong><div class="small mono">A ${esc(x.venda_a_id)}</div></td>
+        <td><strong>${esc(x.venda_c_id)}</strong><div class="small mono">C ${esc(x.venda_c_id)}</div></td>
+        <td>${esc(x.cliente)}<div class="small">${esc(x.numero_ecommerce)}</div></td>
+        <td>${badge(x.situacao_a||'sem status','info')}</td>
+        <td>${date(x.last_sync_at||x.updated_at)}</td>
+        <td>${badge(x.last_job_status||x.last_sync_status||'—','muted')}</td>
+      </tr>`));
+    document.querySelectorAll('tr[data-c]').forEach(r=>r.onclick=()=>openDetail({a:r.dataset.a,c:r.dataset.c}));
+  }else{
+    let list=d.errors.filter(matches);
+    if(state.subtab!=='all')list=list.filter(x=>(x.status||'erro')===state.subtab);
+    $('tableWrap').innerHTML=table(['Job','Tipo','Status','Pedido','Tentativas','Erro'],list.map(x=>`
+      <tr data-job="${esc(x.id)}">
+        <td class="mono">${esc(x.id)}</td>
+        <td class="mono">${esc(x.job_type)}</td>
+        <td>${badge(x.status,x.status==='waiting_sku'?'warn':'bad')}</td>
+        <td class="mono">${esc(x.payload.venda_id||x.payload.venda_a_id||x.payload.venda_c_id)}</td>
+        <td>${esc(x.attempts||0)}</td>
+        <td><div class="small">${esc(x.last_error)}</div></td>
+      </tr>`));
+    document.querySelectorAll('tr[data-job]').forEach(r=>r.onclick=()=>openDetail({job:r.dataset.job}));
+  }
+}
+
+function pick(o,path){return path.split('.').reduce((a,p)=>a&&a[p],o)}
+function field(label,value){return `<div class="field"><label>${label}</label><div>${esc(value)}</div></div>`}
+
+async function openDetail({a,c,job}){
+  $('drawerTitle').textContent='Carregando pedido';
+  $('drawerBody').innerHTML='<div class="empty">Carregando...</div>';
+  $('backdrop').classList.add('open');$('drawer').classList.add('open');
+  const params=new URLSearchParams();
+  if(a)params.set('venda_a_id',a);if(c)params.set('venda_c_id',c);if(job)params.set('job_id',job);
+  const res=await fetch('/admin/orders-panel/detail?'+params.toString());
+  const data=await res.json();
+  $('drawerTitle').textContent=`Pedido A ${fmt(data.venda_a_id)}${data.venda_c_id?' / C '+data.venda_c_id:''}`;
+  const origin=data.origin||{},dest=data.destination||{};
+  const common=[
+    ['Número',pick(origin,'numero')||pick(origin,'numeroPedido'),pick(dest,'numero')||pick(dest,'numeroPedido')],
+    ['Cliente',pick(origin,'cliente.nome'),pick(dest,'cliente.nome')],
+    ['CPF/CNPJ',pick(origin,'cliente.cpfCnpj'),pick(dest,'cliente.cpfCnpj')],
+    ['Situação',pick(origin,'situacao'),pick(dest,'situacao')],
+    ['CEP entrega',pick(origin,'enderecoEntrega.cep'),pick(dest,'enderecoEntrega.cep')],
+    ['Cidade entrega',pick(origin,'enderecoEntrega.municipio'),pick(dest,'enderecoEntrega.municipio')],
+    ['UF entrega',pick(origin,'enderecoEntrega.uf'),pick(dest,'enderecoEntrega.uf')],
+    ['Itens',Array.isArray(origin.itens)?origin.itens.length:0,Array.isArray(dest.itens)?dest.itens.length:0],
+  ];
+  $('drawerBody').innerHTML=`
+    <section class="compare">
+      <div class="box"><h3>Origem</h3><div class="fields">${common.map(x=>field(x[0],x[1])).join('')}</div></div>
+      <div class="box"><h3>Destino</h3><div class="fields">${data.destination_error?field('Aviso',data.destination_error):common.map(x=>field(x[0],x[2])).join('')}</div></div>
+    </section>
+    <section class="diffs">
+      <h3>Divergências (${(data.differences||[]).length})</h3>
+      ${(data.differences||[]).length?(data.differences||[]).map(d=>`<div class="diff-row"><strong>${esc(d.label)}</strong><div>${esc(d.origin)}</div><div>${esc(d.destination)}</div></div>`).join(''):'<div class="empty">Sem divergências detectadas nos campos principais.</div>'}
+    </section>
+    <section class="compare" style="margin-top:12px">
+      <div class="box"><h3>JSON origem</h3><div class="fields"><pre class="pre">${esc(JSON.stringify(origin,null,2))}</pre></div></div>
+      <div class="box"><h3>JSON destino</h3><div class="fields"><pre class="pre">${esc(JSON.stringify(dest,null,2))}</pre></div></div>
+    </section>`;
+}
+
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));b.classList.add('active');state.tab=b.dataset.tab;state.subtab=state.tab==='origin'?'valid':'all';render()});
+$('search').oninput=e=>{state.query=e.target.value;renderTable()};
+$('clearBtn').onclick=()=>{$('search').value='';state.query='';renderTable()};
+$('refreshBtn').onclick=load;
+$('closeDrawer').onclick=()=>{$('backdrop').classList.remove('open');$('drawer').classList.remove('open')};
+$('backdrop').onclick=$('closeDrawer').onclick;
+load();
+</script>
+</body>
+</html>

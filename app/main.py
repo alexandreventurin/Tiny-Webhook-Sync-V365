@@ -1,13 +1,20 @@
 import json
 import asyncio
+import base64
+import hashlib
+import hmac
+import html
 import logging
+import os
 import sys
+import time
+import urllib.parse
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 from pathlib import Path
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, RedirectResponse
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 
@@ -49,6 +56,143 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Tiny Webhooks Receiver", lifespan=lifespan)
+
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "adm.muybela")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Jesus!123456")
+ADMIN_SESSION_COOKIE = "tiny_admin_session"
+ADMIN_SESSION_MAX_AGE = int(os.getenv("ADMIN_SESSION_MAX_AGE", str(8 * 60 * 60)))
+ADMIN_SESSION_SECRET = os.getenv("ADMIN_SESSION_SECRET") or hashlib.sha256(
+    f"{ADMIN_USERNAME}:{ADMIN_PASSWORD}:{APP_BUILD}".encode("utf-8")
+).hexdigest()
+PROTECTED_PATHS = ("/admin", "/dashboard", "/import", "/orders-panel")
+
+
+def _sign_session(message: str) -> str:
+    return hmac.new(ADMIN_SESSION_SECRET.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _encode_session(username: str) -> str:
+    issued_at = str(int(time.time()))
+    message = f"{username}:{issued_at}"
+    token = f"{message}:{_sign_session(message)}"
+    return base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii")
+
+
+def _decode_session(cookie_value: str | None) -> str | None:
+    if not cookie_value:
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(cookie_value.encode("ascii")).decode("utf-8")
+        username, issued_at, signature = raw.rsplit(":", 2)
+        message = f"{username}:{issued_at}"
+        if not hmac.compare_digest(signature, _sign_session(message)):
+            return None
+        if int(time.time()) - int(issued_at) > ADMIN_SESSION_MAX_AGE:
+            return None
+        if not hmac.compare_digest(username, ADMIN_USERNAME):
+            return None
+        return username
+    except Exception:
+        return None
+
+
+def _is_admin_authenticated(request: Request) -> bool:
+    return _decode_session(request.cookies.get(ADMIN_SESSION_COOKIE)) is not None
+
+
+def _login_url_for(request: Request) -> str:
+    next_url = request.url.path
+    if request.url.query:
+        next_url += f"?{request.url.query}"
+    return "/login?next=" + urllib.parse.quote(next_url, safe="")
+
+
+def _wants_html(request: Request) -> bool:
+    accept = request.headers.get("accept", "")
+    return "text/html" in accept or request.url.path in ("/dashboard", "/import", "/orders-panel")
+
+
+@app.middleware("http")
+async def require_admin_login(request: Request, call_next):
+    path = request.url.path
+    is_protected = any(path == prefix or path.startswith(prefix + "/") for prefix in PROTECTED_PATHS)
+    if is_protected and not _is_admin_authenticated(request):
+        if _wants_html(request):
+            return RedirectResponse(_login_url_for(request), status_code=303)
+        return JSONResponse(status_code=401, content={"ok": False, "error": "login_required"})
+    return await call_next(request)
+
+
+def _login_html(error: str = "", next_url: str = "/orders-panel") -> str:
+    error_html = f'<div class="error">{error}</div>' if error else ""
+    safe_next = html.escape(next_url, quote=True)
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login - Tiny Integrator</title>
+<style>
+*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#eef2f7;color:#172033;display:grid;place-items:center;padding:24px}}
+.login{{width:100%;max-width:380px;background:#fff;border:1px solid #d8e0ea;border-radius:8px;padding:28px;box-shadow:0 20px 60px rgba(31,41,55,.12)}}
+h1{{margin:0 0 6px;font-size:22px;color:#111827}}p{{margin:0 0 22px;color:#607086;font-size:14px}}label{{display:block;font-size:12px;font-weight:700;color:#475569;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.04em}}
+input{{width:100%;height:42px;border:1px solid #cbd5e1;border-radius:6px;padding:0 12px;font-size:15px;color:#111827;background:#fbfdff}}input:focus{{outline:2px solid #93c5fd;border-color:#2563eb}}
+button{{width:100%;height:42px;margin-top:18px;border:0;border-radius:6px;background:#1f3a5f;color:white;font-weight:700;font-size:14px;cursor:pointer}}button:hover{{background:#172c49}}
+.error{{background:#fff1f2;border:1px solid #fecdd3;color:#be123c;border-radius:6px;padding:10px 12px;font-size:13px;margin-bottom:14px}}
+</style>
+</head>
+<body>
+<main class="login">
+  <h1>Tiny Integrator</h1>
+  <p>Acesso administrativo</p>
+  {error_html}
+  <form method="post" action="/login">
+    <input type="hidden" name="next" value="{safe_next}">
+    <label for="username">Login</label>
+    <input id="username" name="username" autocomplete="username" autofocus>
+    <label for="password">Senha</label>
+    <input id="password" name="password" type="password" autocomplete="current-password">
+    <button type="submit">Entrar</button>
+  </form>
+</main>
+</body>
+</html>"""
+
+
+@app.get("/login")
+async def login_page(next: str = "/orders-panel"):
+    return HTMLResponse(_login_html(next_url=next), headers={"Cache-Control": "no-cache"})
+
+
+@app.post("/login")
+async def login_submit(request: Request):
+    body = (await request.body()).decode("utf-8")
+    form = urllib.parse.parse_qs(body)
+    username = form.get("username", [""])[0]
+    password = form.get("password", [""])[0]
+    next_url = form.get("next", ["/orders-panel"])[0] or "/orders-panel"
+    if not next_url.startswith("/"):
+        next_url = "/orders-panel"
+    if hmac.compare_digest(username, ADMIN_USERNAME) and hmac.compare_digest(password, ADMIN_PASSWORD):
+        response = RedirectResponse(next_url, status_code=303)
+        secure_cookie = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+        response.set_cookie(
+            ADMIN_SESSION_COOKIE,
+            _encode_session(username),
+            max_age=ADMIN_SESSION_MAX_AGE,
+            httponly=True,
+            secure=secure_cookie,
+            samesite="lax",
+        )
+        return response
+    return HTMLResponse(_login_html("Login ou senha inválidos.", next_url=next_url), status_code=401)
+
+
+@app.get("/logout")
+async def logout():
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(ADMIN_SESSION_COOKIE)
+    return response
 
 
 @app.get("/")
@@ -510,6 +654,255 @@ async def admin_runtime():
 async def admin_orders_map(limit: int = 50):
     orders = await get_orders_map_list(limit=limit)
     return {"orders": orders}
+
+
+def _json_payload(value):
+    if value is None:
+        return {}
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return {}
+
+
+def _dig(data, path: str, default=None):
+    current = data
+    for part in path.split("."):
+        if isinstance(current, dict):
+            current = current.get(part)
+        elif isinstance(current, list) and part.isdigit():
+            idx = int(part)
+            current = current[idx] if idx < len(current) else None
+        else:
+            return default
+        if current is None:
+            return default
+    return current
+
+
+def _normalize_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value).strip()
+
+
+def _order_summary_from_snapshot(row: dict) -> dict:
+    payload = _json_payload(row.get("fetched_payload")) or _json_payload(row.get("webhook_payload"))
+    cliente = payload.get("cliente") if isinstance(payload, dict) else {}
+    ecommerce = payload.get("ecommerce") if isinstance(payload, dict) else {}
+    endereco_entrega = payload.get("enderecoEntrega") if isinstance(payload, dict) else {}
+    itens = payload.get("itens") if isinstance(payload, dict) else []
+    if not isinstance(itens, list):
+        itens = []
+    if not isinstance(cliente, dict):
+        cliente = {}
+    if not isinstance(ecommerce, dict):
+        ecommerce = {}
+    if not isinstance(endereco_entrega, dict):
+        endereco_entrega = {}
+
+    reasons = []
+    if not cliente.get("nome"):
+        reasons.append("cliente_sem_nome")
+    if not cliente.get("cpfCnpj"):
+        reasons.append("cliente_sem_cpf_cnpj")
+    if not itens:
+        reasons.append("sem_itens")
+    if not payload:
+        reasons.append("sem_detalhes_do_pedido")
+
+    deposito = payload.get("deposito") if isinstance(payload, dict) else {}
+    deposito_id = deposito.get("id") if isinstance(deposito, dict) else None
+    if deposito_id and str(deposito_id) != "336403602":
+        reasons.append("deposito_nao_exportavel")
+
+    return {
+        "venda_a_id": str(row.get("venda_a_id") or ""),
+        "numero": payload.get("numero") or payload.get("numeroPedido") or ecommerce.get("numeroPedidoEcommerce"),
+        "numero_ecommerce": ecommerce.get("numeroPedidoEcommerce"),
+        "cliente": cliente.get("nome"),
+        "cpf_cnpj": cliente.get("cpfCnpj"),
+        "situacao": payload.get("situacao"),
+        "data": payload.get("data") or payload.get("dataPedido"),
+        "cidade": endereco_entrega.get("municipio") or endereco_entrega.get("cidade"),
+        "uf": endereco_entrega.get("uf"),
+        "itens": len(itens),
+        "updated_at": row.get("updated_at"),
+        "valid_for_export": len(reasons) == 0,
+        "reasons": reasons,
+    }
+
+
+def _diff_orders(origin: dict, destination: dict) -> list[dict]:
+    checks = [
+        ("Cliente", "cliente.nome", "cliente.nome"),
+        ("CPF/CNPJ", "cliente.cpfCnpj", "cliente.cpfCnpj"),
+        ("Situação", "situacao", "situacao"),
+        ("CEP entrega", "enderecoEntrega.cep", "enderecoEntrega.cep"),
+        ("UF entrega", "enderecoEntrega.uf", "enderecoEntrega.uf"),
+        ("Cidade entrega", "enderecoEntrega.municipio", "enderecoEntrega.municipio"),
+        ("Número e-commerce", "ecommerce.numeroPedidoEcommerce", "numeroOrdemCompra"),
+        ("Qtd. itens", "itens", "itens"),
+    ]
+    differences = []
+    for label, origin_path, destination_path in checks:
+        origin_value = _dig(origin, origin_path)
+        destination_value = _dig(destination, destination_path)
+        if label == "Qtd. itens":
+            origin_value = len(origin_value) if isinstance(origin_value, list) else 0
+            destination_value = len(destination_value) if isinstance(destination_value, list) else 0
+        if _normalize_text(origin_value) != _normalize_text(destination_value):
+            differences.append({
+                "label": label,
+                "origin_path": origin_path,
+                "destination_path": destination_path,
+                "origin": origin_value,
+                "destination": destination_value,
+            })
+    return differences
+
+
+@app.get("/orders-panel")
+async def orders_panel():
+    return FileResponse("app/static/orders_panel.html")
+
+
+@app.get("/admin/orders-panel/data")
+async def admin_orders_panel_data(limit: int = 120):
+    from app.db import get_pool
+    p = await get_pool()
+    async with p.acquire() as conn:
+        origin_rows = await conn.fetch("""
+            SELECT oas.venda_a_id, oas.webhook_payload, oas.fetched_payload, oas.updated_at
+            FROM public.orders_a_snapshot oas
+            LEFT JOIN public.orders_map om ON om.venda_a_id::text = oas.venda_a_id
+            WHERE om.venda_a_id IS NULL
+            ORDER BY oas.updated_at DESC
+            LIMIT $1
+        """, limit)
+        synced_rows = await conn.fetch("""
+            SELECT om.external_key, om.venda_a_id, om.venda_c_id, om.created_at, om.updated_at,
+                   om.last_sync_status, om.last_sync_at, oas.fetched_payload,
+                   j.status AS last_job_status, j.action_preview
+            FROM public.orders_map om
+            LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
+            LEFT JOIN LATERAL (
+                SELECT status, action_preview
+                FROM public.jobs
+                WHERE payload::jsonb->>'venda_id' = om.venda_a_id::text
+                   OR payload::jsonb->>'venda_a_id' = om.venda_a_id::text
+                   OR payload::jsonb->>'venda_c_id' = om.venda_c_id::text
+                ORDER BY updated_at DESC
+                LIMIT 1
+            ) j ON true
+            ORDER BY om.updated_at DESC
+            LIMIT $1
+        """, limit)
+        error_rows = await conn.fetch("""
+            SELECT id, job_type, dedupe_key, status, payload, attempts, last_error, action_preview, created_at, updated_at
+            FROM public.jobs
+            WHERE status IN ('failed', 'dead', 'waiting_sku', 'skipped_not_mapped')
+            ORDER BY updated_at DESC
+            LIMIT $1
+        """, limit)
+
+    origin = [_order_summary_from_snapshot(dict(row)) for row in origin_rows]
+    synced = []
+    for row in synced_rows:
+        item = dict(row)
+        payload = _json_payload(item.get("fetched_payload"))
+        cliente = payload.get("cliente") if isinstance(payload, dict) else {}
+        ecommerce = payload.get("ecommerce") if isinstance(payload, dict) else {}
+        item["cliente"] = cliente.get("nome") if isinstance(cliente, dict) else None
+        item["numero"] = payload.get("numero") or payload.get("numeroPedido") if isinstance(payload, dict) else None
+        item["numero_ecommerce"] = ecommerce.get("numeroPedidoEcommerce") if isinstance(ecommerce, dict) else None
+        item["situacao_a"] = payload.get("situacao") if isinstance(payload, dict) else None
+        item["action_preview"] = _json_payload(item.get("action_preview"))
+        synced.append(item)
+
+    errors = []
+    for row in error_rows:
+        item = dict(row)
+        item["payload"] = _json_payload(item.get("payload"))
+        item["action_preview"] = _json_payload(item.get("action_preview"))
+        errors.append(item)
+
+    return {
+        "origin": {
+            "valid": [item for item in origin if item["valid_for_export"]],
+            "invalid": [item for item in origin if not item["valid_for_export"]],
+        },
+        "synced": synced,
+        "errors": errors,
+    }
+
+
+@app.get("/admin/orders-panel/detail")
+async def admin_orders_panel_detail(venda_a_id: str | None = None, venda_c_id: str | None = None, job_id: int | None = None):
+    from app.db import get_pool
+    p = await get_pool()
+    origin_payload = {}
+    mapping = None
+    related_jobs = []
+
+    async with p.acquire() as conn:
+        if job_id and not venda_a_id and not venda_c_id:
+            job = await conn.fetchrow("SELECT payload FROM public.jobs WHERE id = $1", job_id)
+            payload = _json_payload(job["payload"]) if job else {}
+            venda_a_id = payload.get("venda_a_id") or payload.get("venda_id")
+            venda_c_id = payload.get("venda_c_id")
+        if venda_a_id:
+            origin_row = await conn.fetchrow("""
+                SELECT fetched_payload, webhook_payload
+                FROM public.orders_a_snapshot
+                WHERE venda_a_id = $1
+            """, str(venda_a_id))
+            if origin_row:
+                origin_payload = _json_payload(origin_row["fetched_payload"]) or _json_payload(origin_row["webhook_payload"])
+            mapping = await conn.fetchrow("""
+                SELECT external_key, venda_a_id, venda_c_id, created_at, updated_at, last_sync_status, last_sync_at
+                FROM public.orders_map
+                WHERE venda_a_id::text = $1
+            """, str(venda_a_id))
+            if mapping and not venda_c_id:
+                venda_c_id = str(mapping["venda_c_id"]) if mapping["venda_c_id"] else None
+        related_jobs = await conn.fetch("""
+            SELECT id, job_type, status, attempts, last_error, action_preview, created_at, updated_at
+            FROM public.jobs
+            WHERE ($1::text IS NOT NULL AND (payload::jsonb->>'venda_id' = $1 OR payload::jsonb->>'venda_a_id' = $1))
+               OR ($2::text IS NOT NULL AND payload::jsonb->>'venda_c_id' = $2)
+            ORDER BY updated_at DESC
+            LIMIT 20
+        """, str(venda_a_id) if venda_a_id else None, str(venda_c_id) if venda_c_id else None)
+
+    destination_payload = {}
+    destination_error = None
+    if venda_c_id:
+        try:
+            from app.tiny_oauth import ensure_access_token
+            from app.tiny_client import TinyClient
+            token = await ensure_access_token("B")
+            if token:
+                destination_payload = await TinyClient(token).get_order_details(str(venda_c_id))
+            else:
+                destination_error = "Token do Tiny destino indisponível."
+        except Exception as exc:
+            destination_error = str(exc)
+
+    return {
+        "venda_a_id": venda_a_id,
+        "venda_c_id": venda_c_id,
+        "mapping": dict(mapping) if mapping else None,
+        "origin": origin_payload,
+        "destination": destination_payload,
+        "destination_error": destination_error,
+        "differences": _diff_orders(origin_payload, destination_payload) if destination_payload else [],
+        "jobs": [dict(row) for row in related_jobs],
+    }
 
 
 @app.get("/admin/tiny_a/ping")

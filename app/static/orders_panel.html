@@ -73,11 +73,19 @@ function matches(item){return !state.query||textOf(item).includes(state.query.to
 
 async function load(){
   document.body.classList.add('loading');
-  const res=await fetch('/admin/orders-panel/data?limit=160');
-  if(res.status===401){location.href='/login?next=/orders-panel';return}
-  state.data=await res.json();
-  document.body.classList.remove('loading');
-  render();
+  try{
+    const res=await fetch('/admin/orders-panel/data?limit=160');
+    if(res.status===401){location.href='/login?next=/orders-panel';return}
+    if(!res.ok)throw new Error('Falha ao carregar pedidos: '+res.status);
+    state.data=await res.json();
+    render();
+  }catch(err){
+    $('summary').innerHTML='';
+    $('subtabs').innerHTML='';
+    $('tableWrap').innerHTML=`<div class="empty">${esc(err.message||err)}</div>`;
+  }finally{
+    document.body.classList.remove('loading');
+  }
 }
 
 function render(){

@@ -786,19 +786,9 @@ async def admin_orders_panel_data(limit: int = 120):
         """, limit)
         synced_rows = await conn.fetch("""
             SELECT om.external_key, om.venda_a_id, om.venda_c_id, om.created_at, om.updated_at,
-                   om.last_sync_status, om.last_sync_at, oas.fetched_payload,
-                   j.status AS last_job_status, j.action_preview
+                   om.last_sync_status, om.last_sync_at, oas.fetched_payload
             FROM public.orders_map om
             LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
-            LEFT JOIN LATERAL (
-                SELECT status, action_preview
-                FROM public.jobs
-                WHERE payload::jsonb->>'venda_id' = om.venda_a_id::text
-                   OR payload::jsonb->>'venda_a_id' = om.venda_a_id::text
-                   OR payload::jsonb->>'venda_c_id' = om.venda_c_id::text
-                ORDER BY updated_at DESC
-                LIMIT 1
-            ) j ON true
             ORDER BY om.updated_at DESC
             LIMIT $1
         """, limit)
@@ -821,7 +811,8 @@ async def admin_orders_panel_data(limit: int = 120):
         item["numero"] = payload.get("numero") or payload.get("numeroPedido") if isinstance(payload, dict) else None
         item["numero_ecommerce"] = ecommerce.get("numeroPedidoEcommerce") if isinstance(ecommerce, dict) else None
         item["situacao_a"] = payload.get("situacao") if isinstance(payload, dict) else None
-        item["action_preview"] = _json_payload(item.get("action_preview"))
+        item["last_job_status"] = item.get("last_sync_status")
+        item["action_preview"] = {}
         synced.append(item)
 
     errors = []

@@ -427,6 +427,32 @@ async def process_job(job: dict) -> None:
             
             id_contato_c = None
             contact_created = False
+            contact_updated = False
+            nome_raw = cliente.get('nome') or ''
+            nome_truncado = nome_raw[:50] if len(nome_raw) > 50 else nome_raw
+            if len(nome_raw) > 50:
+                logger.warning(f"Job {job_id}: nome do contato truncado de {len(nome_raw)} para 50 chars: '{nome_raw}' -> '{nome_truncado}'")
+            contact_payload = {
+                "nome": nome_truncado,
+                "cpfCnpj": cpf_cnpj,
+                "tipoPessoa": cliente.get('tipoPessoa') or ('J' if len(cpf_cnpj.replace('.','').replace('-','').replace('/','')) > 11 else 'F'),
+                "email": cliente.get('email'),
+                "telefone": cliente.get('telefone') or cliente.get('fone'),
+                "celular": cliente.get('celular'),
+                "endereco": {
+                    "endereco": endereco.get('endereco') or endereco.get('logradouro'),
+                    "numero": endereco.get('enderecoNro') or endereco.get('numero'),
+                    "complemento": endereco.get('complemento'),
+                    "bairro": endereco.get('bairro'),
+                    "municipio": endereco.get('municipio') or endereco.get('cidade'),
+                    "cep": endereco.get('cep'),
+                    "uf": endereco.get('uf')
+                }
+            }
+            contact_payload = {k: v for k, v in contact_payload.items() if v is not None}
+            if contact_payload.get('endereco'):
+                contact_payload['endereco'] = {k: v for k, v in contact_payload['endereco'].items() if v is not None}
+
             try:
                 contacts = await call_tiny("B", client_c, "search_contacts", cpf_cnpj)
                 if contacts:
@@ -435,32 +461,16 @@ async def process_job(job: dict) -> None:
             except TinyApiError as e:
                 logger.warning(f"Error searching contacts: {e}")
             
-            if not id_contato_c:
-                nome_raw = cliente.get('nome') or ''
-                nome_truncado = nome_raw[:50] if len(nome_raw) > 50 else nome_raw
-                if len(nome_raw) > 50:
-                    logger.warning(f"Job {job_id}: nome do contato truncado de {len(nome_raw)} para 50 chars: '{nome_raw}' -> '{nome_truncado}'")
-                contact_payload = {
-                    "nome": nome_truncado,
-                    "cpfCnpj": cpf_cnpj,
-                    "tipoPessoa": cliente.get('tipoPessoa') or ('J' if len(cpf_cnpj.replace('.','').replace('-','').replace('/','')) > 11 else 'F'),
-                    "email": cliente.get('email'),
-                    "telefone": cliente.get('telefone') or cliente.get('fone'),
-                    "celular": cliente.get('celular'),
-                    "endereco": {
-                        "endereco": endereco.get('endereco') or endereco.get('logradouro'),
-                        "numero": endereco.get('enderecoNro') or endereco.get('numero'),
-                        "complemento": endereco.get('complemento'),
-                        "bairro": endereco.get('bairro'),
-                        "municipio": endereco.get('municipio') or endereco.get('cidade'),
-                        "cep": endereco.get('cep'),
-                        "uf": endereco.get('uf')
-                    }
-                }
-                contact_payload = {k: v for k, v in contact_payload.items() if v is not None}
-                if contact_payload.get('endereco'):
-                    contact_payload['endereco'] = {k: v for k, v in contact_payload['endereco'].items() if v is not None}
-                
+            if id_contato_c:
+                try:
+                    await call_tiny("B", client_c, "update_contact", str(id_contato_c), contact_payload)
+                    contact_updated = True
+                    logger.info(f"Updated contact in B with delivery address: {id_contato_c}")
+                except TinyApiError as e:
+                    await update_job_failed(job_id, f"Failed to update contact: {e.status_code} {e.body}", attempts)
+                    logger.error(f"Job {job_id} failed to update contact {id_contato_c}: {e}")
+                    return
+            else:
                 try:
                     contact_result = await call_tiny("B", client_c, "create_contact", contact_payload)
                     id_contato_c = contact_result.get('id')
@@ -633,6 +643,7 @@ async def process_job(job: dict) -> None:
                 "external_key": external_key,
                 "id_contato_c": id_contato_c,
                 "contact_created": contact_created,
+                "contact_updated": contact_updated,
                 "itens_mapped": len(itens_c),
                 "forma_envio_origem": forma_envio_src,
                 "forma_frete_origem": forma_frete_src,

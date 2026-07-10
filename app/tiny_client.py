@@ -118,6 +118,17 @@ class TinyClient:
                 raise TinyApiError(response.status_code, response.text, url)
             return response.json()
 
+    async def update_contact(self, contato_id: str, contact_payload: dict) -> dict:
+        url = f"{self._base_url}/contatos/{contato_id}"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.put(url, headers=self._headers(), json=contact_payload)
+            self._read_ratelimit_headers(response)
+            if response.status_code not in (200, 204):
+                raise TinyApiError(response.status_code, response.text, url)
+            if response.status_code == 204:
+                return {}
+            return response.json()
+
     async def search_products(self, codigo: str) -> list:
         url = f"{self._base_url}/produtos"
         params = {"codigo": codigo}

@@ -690,12 +690,39 @@ def _normalize_text(value):
     return str(value).strip()
 
 
+def _first_present(*values):
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _normalize_address(address: dict) -> dict:
+    if not isinstance(address, dict):
+        return {}
+    return {
+        "cep": _normalize_text(address.get("cep")).lower(),
+        "uf": _normalize_text(address.get("uf")).lower(),
+        "cidade": _normalize_text(address.get("municipio") or address.get("cidade")).lower(),
+        "endereco": _normalize_text(address.get("endereco") or address.get("logradouro")).lower(),
+        "numero": _normalize_text(address.get("numero")).lower(),
+        "bairro": _normalize_text(address.get("bairro")).lower(),
+        "complemento": _normalize_text(address.get("complemento")).lower(),
+    }
+
+
 def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None = None) -> dict:
     mapped_product_ids = mapped_product_ids or set()
     payload = _json_payload(row.get("fetched_payload")) or _json_payload(row.get("webhook_payload"))
     cliente = payload.get("cliente") if isinstance(payload, dict) else {}
     ecommerce = payload.get("ecommerce") if isinstance(payload, dict) else {}
     endereco_entrega = payload.get("enderecoEntrega") if isinstance(payload, dict) else {}
+    endereco_faturamento = payload.get("endereco") if isinstance(payload, dict) else {}
+    if not isinstance(endereco_faturamento, dict):
+        endereco_faturamento = cliente.get("endereco") if isinstance(cliente, dict) else {}
+    forma_envio = payload.get("formaEnvio") if isinstance(payload, dict) else {}
+    forma_frete = payload.get("formaFrete") if isinstance(payload, dict) else {}
+    transportador = payload.get("transportador") if isinstance(payload, dict) else {}
     itens = payload.get("itens") if isinstance(payload, dict) else []
     if not isinstance(itens, list):
         itens = []
@@ -705,6 +732,19 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
         ecommerce = {}
     if not isinstance(endereco_entrega, dict):
         endereco_entrega = {}
+    if not isinstance(endereco_faturamento, dict):
+        endereco_faturamento = {}
+    if not isinstance(forma_envio, dict):
+        forma_envio = {}
+    if not isinstance(forma_frete, dict):
+        forma_frete = {}
+    if not isinstance(transportador, dict):
+        transportador = {}
+
+    billing_address = _normalize_address(endereco_faturamento)
+    delivery_address = _normalize_address(endereco_entrega)
+    has_delivery_address = any(delivery_address.values())
+    address_differs = has_delivery_address and billing_address != delivery_address
 
     adjustment_reasons = []
     block_reasons = []
@@ -752,14 +792,52 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
     return {
         "venda_a_id": str(row.get("venda_a_id") or ""),
         "numero": payload.get("numero") or payload.get("numeroPedido") or ecommerce.get("numeroPedidoEcommerce"),
-        "numero_ecommerce": ecommerce.get("numeroPedidoEcommerce"),
+        "numero_ecommerce": _first_present(
+            ecommerce.get("numeroPedidoEcommerce"),
+            ecommerce.get("numeroPedido"),
+            ecommerce.get("pedido"),
+            payload.get("numeroPedidoEcommerce"),
+        ),
+        "ecommerce_nome": _first_present(
+            ecommerce.get("nome"),
+            ecommerce.get("nomeEcommerce"),
+            ecommerce.get("canalVenda"),
+            ecommerce.get("plataforma"),
+            payload.get("ecommerceNome"),
+        ),
         "cliente": cliente.get("nome"),
         "cpf_cnpj": cliente.get("cpfCnpj"),
         "situacao": payload.get("situacao"),
         "situacao_normalized": status_normalized,
         "data": payload.get("data") or payload.get("dataPedido"),
+        "hora": _first_present(payload.get("hora"), payload.get("horaPedido"), payload.get("horario")),
+        "data_hora": _first_present(
+            payload.get("dataHora"),
+            payload.get("dataHoraPedido"),
+            payload.get("dataCriacao"),
+            payload.get("dataAtualizacao"),
+            " ".join([str(x) for x in [payload.get("data") or payload.get("dataPedido"), _first_present(payload.get("hora"), payload.get("horaPedido"), payload.get("horario"))] if x]),
+        ),
         "cidade": endereco_entrega.get("municipio") or endereco_entrega.get("cidade"),
         "uf": endereco_entrega.get("uf"),
+        "forma_envio": _first_present(
+            forma_envio.get("nome"),
+            forma_envio.get("descricao"),
+            forma_envio.get("formaEnvio"),
+        ),
+        "forma_frete": _first_present(
+            forma_frete.get("nome"),
+            forma_frete.get("descricao"),
+            forma_frete.get("formaFrete"),
+        ),
+        "codigo_rastreamento": _first_present(
+            payload.get("codigoRastreamento"),
+            payload.get("codigo_rastreamento"),
+            payload.get("rastreamento"),
+            transportador.get("codigoRastreamento"),
+            transportador.get("codigo_rastreamento"),
+        ),
+        "endereco_faturamento_diferente_entrega": address_differs,
         "itens": len(itens),
         "updated_at": row.get("updated_at"),
         "valid_for_export": export_category == "valid",

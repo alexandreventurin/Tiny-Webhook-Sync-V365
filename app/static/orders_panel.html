@@ -142,12 +142,13 @@ function renderTable(){
       do_not_export:d.origin.do_not_export||[],
     };
     const list=(sourceLists[state.subtab]||sourceLists.valid).filter(matches);
-    $('tableWrap').innerHTML=table(['Pedido','Cliente','Situação','Entrega','Itens','Motivos'],list.map(x=>`
+    $('tableWrap').innerHTML=table(['Pedido','Data/Hora','Cliente / Ecommerce','Situação','Envio / Rastreio','Itens','Motivos'],list.map(x=>`
       <tr data-a="${esc(x.venda_a_id)}">
-        <td><strong>${esc(x.numero||x.venda_a_id)}</strong><div class="small mono">A ${esc(x.venda_a_id)}</div></td>
-        <td>${esc(x.cliente)}<div class="small">${esc(x.cpf_cnpj)}</div></td>
+        <td><strong>${esc(x.numero||x.venda_a_id)}</strong><div class="small mono">ID A ${esc(x.venda_a_id)}</div></td>
+        <td>${esc(x.data_hora||x.data||x.updated_at)}<div class="small">${date(x.updated_at)}</div></td>
+        <td>${esc(x.cliente)}<div class="small">${esc(x.cpf_cnpj)}</div><div class="small">${esc(x.ecommerce_nome||'Ecommerce')} ${x.numero_ecommerce?`· ${esc(x.numero_ecommerce)}`:''}</div></td>
         <td>${badge(x.situacao_normalized||x.situacao||'sem status',x.export_category==='valid'?'ok':(x.export_category==='do_not_export'?'bad':'warn'))}</td>
-        <td>${esc([x.cidade,x.uf].filter(Boolean).join(' / '))}</td>
+        <td>${esc(x.forma_envio||x.forma_frete||'—')}<div class="small mono">${esc(x.codigo_rastreamento||'sem rastreio')}</div>${x.endereco_faturamento_diferente_entrega?badge('entrega diferente','info'):''}</td>
         <td>${esc(x.itens)}</td>
         <td><div class="reason">${x.reasons.length?x.reasons.map(r=>badge(r,x.export_category==='do_not_export'?'bad':'warn')).join(''):badge('pronto','ok')}</div></td>
       </tr>`));
@@ -157,7 +158,7 @@ function renderTable(){
     if(state.subtab!=='all')list=list.filter(x=>(x.situacao_a||x.last_sync_status||'sem status')===state.subtab);
     $('tableWrap').innerHTML=table(['Origem','Destino','Cliente','Situação em A','Última sincronização','Job'],list.map(x=>`
       <tr data-a="${esc(x.venda_a_id)}" data-c="${esc(x.venda_c_id)}">
-        <td><strong>${esc(x.numero||x.venda_a_id)}</strong><div class="small mono">A ${esc(x.venda_a_id)}</div></td>
+        <td><strong>${esc(x.numero||x.venda_a_id)}</strong><div class="small mono">ID A ${esc(x.venda_a_id)}</div></td>
         <td><strong>${esc(x.venda_c_id)}</strong><div class="small mono">C ${esc(x.venda_c_id)}</div></td>
         <td>${esc(x.cliente)}<div class="small">${esc(x.numero_ecommerce)}</div></td>
         <td>${badge(x.situacao_a||'sem status','info')}</td>

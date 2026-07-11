@@ -10,7 +10,7 @@
 .brand{display:flex;align-items:baseline;gap:12px}.brand h1{margin:0;font-size:17px;font-weight:700}.brand span{font-size:12px;color:#9fb0c5}
 .nav{display:flex;align-items:center;gap:10px}.nav a,.nav button{border:0;background:#26364a;color:#dbe7f5;border-radius:6px;padding:8px 11px;text-decoration:none;font-size:13px;cursor:pointer}.nav button:hover,.nav a:hover{background:#334a65;color:#fff}
 .wrap{max-width:1380px;margin:0 auto;padding:18px}
-.toolbar{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;margin-bottom:14px}.search{height:40px;border:1px solid #cbd5e1;border-radius:6px;padding:0 12px;font-size:14px;background:#fff}.actions{display:flex;gap:8px}.actions button{height:40px;border:1px solid #b6c2d1;background:#fff;border-radius:6px;padding:0 12px;font-size:13px;cursor:pointer;color:#26364a}.actions button:hover{background:#eef4fb}
+.toolbar{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;margin-bottom:10px}.search{height:40px;border:1px solid #cbd5e1;border-radius:6px;padding:0 12px;font-size:14px;background:#fff}.actions{display:flex;gap:8px}.actions button{height:40px;border:1px solid #b6c2d1;background:#fff;border-radius:6px;padding:0 12px;font-size:13px;cursor:pointer;color:#26364a}.actions button:hover{background:#eef4fb}.filters{display:none;grid-template-columns:repeat(4,minmax(160px,1fr));gap:10px;margin-bottom:14px}.filters.open{display:grid}.filters label{font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.04em}.filters select,.filters input{width:100%;height:36px;border:1px solid #cbd5e1;border-radius:6px;padding:0 10px;background:#fff;color:#172033}
 .tabs{display:flex;gap:6px;border-bottom:1px solid #cbd5e1;margin-bottom:12px;overflow:auto}.tab{border:0;background:transparent;color:#536274;padding:12px 14px;font-size:14px;font-weight:700;cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap}.tab.active{color:#10243e;border-bottom-color:#2563eb}
 .subtabs{display:flex;gap:8px;align-items:center;margin:0 0 12px;overflow:auto}.subtab{height:32px;border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:0 10px;font-size:12px;font-weight:700;color:#536274;cursor:pointer;white-space:nowrap}.subtab.active{background:#1f3a5f;color:#fff;border-color:#1f3a5f}
 .summary{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px;margin-bottom:14px}.metric{background:#fff;border:1px solid #d9e1ea;border-radius:8px;padding:12px}.metric .value{font-size:25px;font-weight:800;color:#172033}.metric .label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#6b7b8d;margin-top:3px}
@@ -39,7 +39,14 @@
     <input id="search" class="search" placeholder="Pesquisar por pedido, cliente, CPF/CNPJ, status ou ID">
     <div class="actions">
       <button id="clearBtn">Limpar</button>
+      <button id="filtersBtn">Filtros</button>
     </div>
+  </section>
+  <section class="filters" id="filters">
+    <div><label>Data</label><select id="filterDays"><option value="30">Últimos 30 dias</option><option value="7">Últimos 7 dias</option><option value="90">Últimos 90 dias</option><option value="365">Últimos 365 dias</option></select></div>
+    <div><label>Divergência</label><select id="filterDivergence"><option value="">Todos</option><option value="yes">Com divergência</option><option value="no">Sem divergência</option></select></div>
+    <div><label>Ecommerce</label><input id="filterEcommerce" placeholder="Shopify, Mercado Livre..."></div>
+    <div><label>Situação origem</label><select id="filterOriginStatus"><option value="">Todas</option></select></div>
   </section>
   <section class="summary" id="summary"></section>
   <section class="tabs">
@@ -61,7 +68,7 @@
   <div class="drawer-body" id="drawerBody"></div>
 </aside>
 <script>
-const state={tab:'origin',subtab:'valid',query:'',data:null};
+const state={tab:'origin',subtab:'valid',query:'',data:null,filters:{days:'30',divergence:'',ecommerce:'',originStatus:''}};
 const $=id=>document.getElementById(id);
 const fmt=v=>v===null||v===undefined||v===''?'—':String(v);
 const date=v=>v?new Date(v).toLocaleString('pt-BR'):'—';
@@ -71,11 +78,18 @@ const textOf=o=>JSON.stringify(o||{}).toLowerCase();
 
 function badge(label,type='muted'){return `<span class="badge ${type}">${esc(label)}</span>`}
 function matches(item){return !state.query||textOf(item).includes(state.query.toLowerCase())}
+function matchesFilters(item){
+  if(state.filters.ecommerce && !String(item.ecommerce_nome||'').toLowerCase().includes(state.filters.ecommerce.toLowerCase()))return false;
+  if(state.filters.originStatus && (item.situacao_a_label||item.situacao_label||'')!==state.filters.originStatus)return false;
+  if(state.tab==='synced'&&state.filters.divergence==='yes'&&!(item.divergence_count>0))return false;
+  if(state.tab==='synced'&&state.filters.divergence==='no'&&item.divergence_count!==0)return false;
+  return true;
+}
 
 async function load(){
   document.body.classList.add('loading');
   try{
-    const res=await fetch('/admin/orders-panel/data?limit=160');
+    const res=await fetch(`/admin/orders-panel/data?limit=240&days=${encodeURIComponent(state.filters.days)}&divergence_limit=80`);
     if(res.status===401){location.href='/login?next=/orders-panel';return}
     if(!res.ok)throw new Error('Falha ao carregar pedidos: '+res.status);
     state.data=await res.json();
@@ -90,9 +104,17 @@ async function load(){
 }
 
 function render(){
+  renderFilterOptions();
   renderSummary();
   renderSubtabs();
   renderTable();
+}
+
+function renderFilterOptions(){
+  const all=[...(state.data?.origin?.valid||[]),...(state.data?.origin?.needs_adjustment||[]),...(state.data?.origin?.do_not_export||[]),...(state.data?.synced||[])];
+  const statuses=[...new Set(all.map(x=>x.situacao_a_label||x.situacao_label).filter(Boolean))].sort();
+  const current=state.filters.originStatus;
+  $('filterOriginStatus').innerHTML='<option value="">Todas</option>'+statuses.map(s=>`<option value="${esc(s)}" ${s===current?'selected':''}>${esc(s)}</option>`).join('');
 }
 
 function renderSummary(){
@@ -142,7 +164,7 @@ function renderTable(){
       needs_adjustment:d.origin.needs_adjustment||[],
       do_not_export:d.origin.do_not_export||[],
     };
-    const list=(sourceLists[state.subtab]||sourceLists.valid).filter(matches);
+    const list=(sourceLists[state.subtab]||sourceLists.valid).filter(matches).filter(matchesFilters);
     $('tableWrap').innerHTML=table(['Pedido','Data','Cliente','Ecommerce','Situação','Envio / Rastreio','Itens','Motivos'],list.map(x=>`
       <tr data-a="${esc(x.venda_a_id)}">
         <td><strong>${esc(x.numero||x.venda_a_id)}</strong><div class="small mono">ID A ${esc(x.venda_a_id)}</div></td>
@@ -156,18 +178,17 @@ function renderTable(){
       </tr>`));
     document.querySelectorAll('tr[data-a]').forEach(r=>r.onclick=()=>openDetail({a:r.dataset.a}));
   }else if(state.tab==='synced'){
-    let list=d.synced.filter(matches);
+    let list=d.synced.filter(matches).filter(matchesFilters);
     if(state.subtab!=='all')list=list.filter(x=>(x.situacao_destino_label||x.situacao_destino||'sem status')===state.subtab);
-    $('tableWrap').innerHTML=table(['Origem','Destino','Data','Cliente','Ecommerce','Situação em A','Última sincronização','Divergências','Job'],list.map(x=>`
+    $('tableWrap').innerHTML=table(['Origem','Destino','Data','Cliente','Ecommerce','Última sincronização','Divergências','Job'],list.map(x=>`
       <tr data-a="${esc(x.venda_a_id)}" data-c="${esc(x.venda_c_id)}">
-        <td><strong>${esc(x.numero||x.venda_a_id)}</strong><div class="small mono">ID A ${esc(x.venda_a_id)}</div></td>
+        <td><strong>${esc(x.numero||x.venda_a_id)}</strong><div class="small mono">ID A ${esc(x.venda_a_id)}</div><div>${badge(x.situacao_a_label||x.situacao_label||'sem status','info')}</div></td>
         <td><strong>${esc(x.venda_c_id)}</strong><div class="small mono">ID C ${esc(x.venda_c_id)}</div><div>${badge(x.situacao_destino_label||'em aberto','muted')}</div></td>
         <td>${esc(dateOnly(x.data))}</td>
         <td>${esc(x.cliente)}<div class="small">${esc(x.cpf_cnpj)}</div></td>
         <td>${esc(x.ecommerce_nome||'—')}<div class="small mono">${esc(x.numero_ecommerce||'—')}</div></td>
-        <td>${badge(x.situacao_a_label||x.situacao_label||'sem status','info')}</td>
         <td>${date(x.last_sync_at||x.updated_at)}</td>
-        <td>${x.divergence_count===null?badge('abrir pedido','muted'):badge(x.divergence_count,x.divergence_count?'warn':'ok')}</td>
+        <td>${x.divergence_count===null?badge('—','muted'):badge(x.divergence_count,x.divergence_count?'warn':'ok')}</td>
         <td>${badge(x.last_job_status||x.last_sync_status||'—','muted')}</td>
       </tr>`));
     document.querySelectorAll('tr[data-c]').forEach(r=>r.onclick=()=>openDetail({a:r.dataset.a,c:r.dataset.c}));
@@ -217,7 +238,22 @@ async function openDetail({a,c,job}){
 
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));b.classList.add('active');state.tab=b.dataset.tab;state.subtab=state.tab==='origin'?'valid':'all';render()});
 $('search').oninput=e=>{state.query=e.target.value;renderTable()};
-$('clearBtn').onclick=()=>{$('search').value='';state.query='';renderTable()};
+$('clearBtn').onclick=()=>{
+  $('search').value='';
+  $('filterDivergence').value='';
+  $('filterEcommerce').value='';
+  $('filterOriginStatus').value='';
+  state.query='';
+  state.filters.divergence='';
+  state.filters.ecommerce='';
+  state.filters.originStatus='';
+  renderTable();
+};
+$('filtersBtn').onclick=()=>$('filters').classList.toggle('open');
+$('filterDays').onchange=e=>{state.filters.days=e.target.value;load()};
+$('filterDivergence').onchange=e=>{state.filters.divergence=e.target.value;renderTable()};
+$('filterEcommerce').oninput=e=>{state.filters.ecommerce=e.target.value;renderTable()};
+$('filterOriginStatus').onchange=e=>{state.filters.originStatus=e.target.value;renderTable()};
 $('refreshBtn').onclick=load;
 $('closeDrawer').onclick=()=>{$('backdrop').classList.remove('open');$('drawer').classList.remove('open')};
 $('backdrop').onclick=$('closeDrawer').onclick;

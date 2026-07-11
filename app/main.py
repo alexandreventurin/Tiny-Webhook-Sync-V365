@@ -711,6 +711,12 @@ def _normalize_address(address: dict) -> dict:
     }
 
 
+def _object_name(value):
+    if isinstance(value, dict):
+        return _first_present(value.get("nome"), value.get("descricao"), value.get("formaEnvio"), value.get("formaFrete"))
+    return value if value not in (None, "") else None
+
+
 STATUS_LABELS = {
     "em_aberto": "em aberto",
     "faturado": "faturado",
@@ -762,9 +768,9 @@ def _order_display_fields(payload: dict) -> dict:
     cliente = payload.get("cliente") if isinstance(payload.get("cliente"), dict) else {}
     ecommerce = payload.get("ecommerce") if isinstance(payload.get("ecommerce"), dict) else {}
     endereco_entrega = payload.get("enderecoEntrega") if isinstance(payload.get("enderecoEntrega"), dict) else {}
-    forma_envio = payload.get("formaEnvio") if isinstance(payload.get("formaEnvio"), dict) else {}
-    forma_frete = payload.get("formaFrete") if isinstance(payload.get("formaFrete"), dict) else {}
     transportador = payload.get("transportador") if isinstance(payload.get("transportador"), dict) else {}
+    forma_envio = payload.get("formaEnvio") if isinstance(payload.get("formaEnvio"), dict) else transportador.get("formaEnvio")
+    forma_frete = payload.get("formaFrete") if isinstance(payload.get("formaFrete"), dict) else transportador.get("formaFrete")
     nota_fiscal = payload.get("notaFiscal") if isinstance(payload.get("notaFiscal"), dict) else {}
     itens = payload.get("itens") if isinstance(payload.get("itens"), list) else []
 
@@ -801,8 +807,8 @@ def _order_display_fields(payload: dict) -> dict:
         "complemento_endereco": endereco_entrega.get("complemento"),
         "itens": len(itens),
         "total_produtos": _money_value(total_produtos),
-        "forma_envio": _first_present(forma_envio.get("nome"), forma_envio.get("descricao"), forma_envio.get("formaEnvio")),
-        "forma_frete": _first_present(forma_frete.get("nome"), forma_frete.get("descricao"), forma_frete.get("formaFrete")),
+        "forma_envio": _first_present(_object_name(forma_envio), _object_name(transportador.get("formaEnvio"))),
+        "forma_frete": _first_present(_object_name(forma_frete), _object_name(transportador.get("formaFrete"))),
         "codigo_rastreamento": _first_present(
             payload.get("codigoRastreamento"),
             payload.get("codigo_rastreamento"),
@@ -844,7 +850,7 @@ def _comparison_fields(origin: dict, destination: dict) -> list[dict]:
         ("numero_endereco", "Nº endereço", True),
         ("complemento_endereco", "Complemento", True),
         ("itens", "Itens", True),
-        ("total_produtos", "Total dos produtos", True),
+        ("total_produtos", "Total dos produtos", False),
         ("forma_envio", "Forma de envio", True),
         ("forma_frete", "Forma de frete", True),
         ("codigo_rastreamento", "Código de rastreamento", True),
@@ -879,6 +885,10 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
     forma_envio = payload.get("formaEnvio") if isinstance(payload, dict) else {}
     forma_frete = payload.get("formaFrete") if isinstance(payload, dict) else {}
     transportador = payload.get("transportador") if isinstance(payload, dict) else {}
+    if not isinstance(forma_envio, dict) and isinstance(transportador, dict):
+        forma_envio = transportador.get("formaEnvio") or {}
+    if not isinstance(forma_frete, dict) and isinstance(transportador, dict):
+        forma_frete = transportador.get("formaFrete") or {}
     itens = payload.get("itens") if isinstance(payload, dict) else []
     if not isinstance(itens, list):
         itens = []
@@ -978,14 +988,12 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
         "cidade": endereco_entrega.get("municipio") or endereco_entrega.get("cidade"),
         "uf": endereco_entrega.get("uf"),
         "forma_envio": _first_present(
-            forma_envio.get("nome"),
-            forma_envio.get("descricao"),
-            forma_envio.get("formaEnvio"),
+            _object_name(forma_envio),
+            _object_name(transportador.get("formaEnvio") if isinstance(transportador, dict) else None),
         ),
         "forma_frete": _first_present(
-            forma_frete.get("nome"),
-            forma_frete.get("descricao"),
-            forma_frete.get("formaFrete"),
+            _object_name(forma_frete),
+            _object_name(transportador.get("formaFrete") if isinstance(transportador, dict) else None),
         ),
         "codigo_rastreamento": _first_present(
             payload.get("codigoRastreamento"),
@@ -1041,26 +1049,52 @@ async def orders_panel():
 
 
 @app.get("/admin/orders-panel/data")
-async def admin_orders_panel_data(limit: int = 120):
+async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_limit: int = 80):
     from app.db import get_pool
+    from app.tiny_client import TinyClient
+    from app.tiny_oauth import ensure_access_token
+    limit = max(1, min(limit, 500))
+    days = max(1, min(days, 365))
+    divergence_limit = max(0, min(divergence_limit, 120))
     p = await get_pool()
     async with p.acquire() as conn:
         origin_rows = await conn.fetch("""
-            SELECT oas.venda_a_id, oas.webhook_payload, oas.fetched_payload, oas.updated_at
-            FROM public.orders_a_snapshot oas
-            LEFT JOIN public.orders_map om ON om.venda_a_id::text = oas.venda_a_id
+            WITH source_orders AS (
+                SELECT oas.*,
+                       CASE
+                           WHEN oas.fetched_payload::jsonb->>'data' ~ '^\\d{4}-\\d{2}-\\d{2}'
+                           THEN substring(oas.fetched_payload::jsonb->>'data' from 1 for 10)::date
+                           ELSE NULL
+                       END AS order_date
+                FROM public.orders_a_snapshot oas
+            )
+            SELECT so.venda_a_id, so.webhook_payload, so.fetched_payload, so.updated_at
+            FROM source_orders so
+            LEFT JOIN public.orders_map om ON om.venda_a_id::text = so.venda_a_id
             WHERE om.venda_a_id IS NULL
-            ORDER BY oas.updated_at DESC
+              AND (so.order_date IS NULL OR so.order_date >= CURRENT_DATE - ($2::int || ' days')::interval)
+            ORDER BY COALESCE(so.order_date, so.updated_at::date) DESC, so.updated_at DESC
             LIMIT $1
-        """, limit)
+        """, limit, days)
         synced_rows = await conn.fetch("""
-            SELECT om.external_key, om.venda_a_id, om.venda_c_id, om.created_at, om.updated_at,
-                   om.last_sync_status, om.last_sync_at, oas.fetched_payload
-            FROM public.orders_map om
-            LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
-            ORDER BY om.updated_at DESC
+            WITH mapped_orders AS (
+                SELECT om.external_key, om.venda_a_id, om.venda_c_id, om.created_at, om.updated_at,
+                       om.last_sync_status, om.last_sync_at, oas.fetched_payload,
+                       CASE
+                           WHEN oas.fetched_payload::jsonb->>'data' ~ '^\\d{4}-\\d{2}-\\d{2}'
+                           THEN substring(oas.fetched_payload::jsonb->>'data' from 1 for 10)::date
+                           ELSE NULL
+                       END AS order_date
+                FROM public.orders_map om
+                LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
+            )
+            SELECT external_key, venda_a_id, venda_c_id, created_at, updated_at,
+                   last_sync_status, last_sync_at, fetched_payload
+            FROM mapped_orders
+            WHERE order_date IS NULL OR order_date >= CURRENT_DATE - ($2::int || ' days')::interval
+            ORDER BY COALESCE(order_date, updated_at::date) DESC, updated_at DESC
             LIMIT $1
-        """, limit)
+        """, limit, days)
         error_rows = await conn.fetch("""
             SELECT id, job_type, dedupe_key, status, payload, attempts, last_error, action_preview, created_at, updated_at
             FROM public.jobs
@@ -1077,6 +1111,8 @@ async def admin_orders_panel_data(limit: int = 120):
     mapped_product_ids = {int(row["id_a"]) for row in mapped_product_rows if row["id_a"] is not None}
     origin = [_order_summary_from_snapshot(dict(row), mapped_product_ids) for row in origin_rows]
     synced = []
+    token_c_for_counts = await ensure_access_token("B") if divergence_limit else None
+    client_c_for_counts = TinyClient(token_c_for_counts) if token_c_for_counts else None
     for row in synced_rows:
         item = dict(row)
         payload = _json_payload(item.get("fetched_payload"))
@@ -1094,6 +1130,13 @@ async def admin_orders_panel_data(limit: int = 120):
         item["last_job_status"] = item.get("last_sync_status")
         item["action_preview"] = {}
         item["divergence_count"] = None
+        if client_c_for_counts and len(synced) < divergence_limit and item.get("venda_c_id"):
+            try:
+                destination_payload = await client_c_for_counts.get_order_details(str(item["venda_c_id"]))
+                fields = _comparison_fields(payload, destination_payload)
+                item["divergence_count"] = len([field for field in fields if field["divergent"]])
+            except Exception as exc:
+                item["divergence_count_error"] = str(exc)[:160]
         synced.append(item)
 
     errors = []
@@ -1111,6 +1154,7 @@ async def admin_orders_panel_data(limit: int = 120):
         },
         "synced": synced,
         "errors": errors,
+        "period_days": days,
     }
 
 

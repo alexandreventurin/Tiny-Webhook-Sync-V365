@@ -1050,7 +1050,7 @@ async def orders_panel():
 
 @app.get("/admin/orders-panel/data")
 async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_limit: int = 80):
-    from app.db import get_pool
+    from app.db import get_pool, upsert_orders_c_fetched, upsert_orders_c_fetch_error
     from app.tiny_client import TinyClient
     from app.tiny_oauth import ensure_access_token
     limit = max(1, min(limit, 500))
@@ -1080,6 +1080,7 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
             WITH mapped_orders AS (
                 SELECT om.external_key, om.venda_a_id, om.venda_c_id, om.created_at, om.updated_at,
                        om.last_sync_status, om.last_sync_at, oas.fetched_payload,
+                       ocs.fetched_payload AS fetched_payload_c, ocs.fetched_at AS fetched_at_c,
                        CASE
                            WHEN oas.fetched_payload::jsonb->>'data' ~ '^\\d{4}-\\d{2}-\\d{2}'
                            THEN substring(oas.fetched_payload::jsonb->>'data' from 1 for 10)::date
@@ -1087,9 +1088,10 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
                        END AS order_date
                 FROM public.orders_map om
                 LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
+                LEFT JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = om.venda_c_id::text
             )
             SELECT external_key, venda_a_id, venda_c_id, created_at, updated_at,
-                   last_sync_status, last_sync_at, fetched_payload
+                   last_sync_status, last_sync_at, fetched_payload, fetched_payload_c, fetched_at_c
             FROM mapped_orders
             WHERE order_date IS NULL OR order_date >= CURRENT_DATE - ($2::int || ' days')::interval
             ORDER BY COALESCE(order_date, updated_at::date) DESC, updated_at DESC
@@ -1122,17 +1124,29 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
             "updated_at": item.get("updated_at"),
         }, mapped_product_ids)
         item.update(origin_summary)
-        destination_status = normalize_status(item.get("last_sync_status")) or "em_aberto"
+        destination_payload = _json_payload(item.get("fetched_payload_c"))
+        if client_c_for_counts and len(synced) < divergence_limit and item.get("venda_c_id") and not destination_payload:
+            try:
+                destination_payload = await client_c_for_counts.get_order_details(str(item["venda_c_id"]))
+                await upsert_orders_c_fetched(str(item["venda_c_id"]), destination_payload)
+            except Exception as exc:
+                await upsert_orders_c_fetch_error(str(item["venda_c_id"]), getattr(exc, "status_code", None), str(exc))
+                item["destination_fetch_error"] = str(exc)[:160]
+        destination_fields = _order_display_fields(destination_payload)
+        destination_status = normalize_status(destination_payload.get("situacao") if isinstance(destination_payload, dict) else None)
+        destination_status = destination_status or normalize_status(item.get("last_sync_status")) or "em_aberto"
         item["situacao_destino"] = destination_status
         item["situacao_destino_label"] = _status_label(destination_status)
+        item["nota_fiscal_destino"] = destination_fields.get("nota_fiscal")
+        item["numero_destino"] = destination_fields.get("numero_pedido")
+        item["destination_snapshot_at"] = item.get("fetched_at_c")
         item["situacao_a"] = payload.get("situacao") if isinstance(payload, dict) else None
         item["situacao_a_label"] = _status_label(item.get("situacao_a"))
         item["last_job_status"] = item.get("last_sync_status")
         item["action_preview"] = {}
         item["divergence_count"] = None
-        if client_c_for_counts and len(synced) < divergence_limit and item.get("venda_c_id"):
+        if destination_payload:
             try:
-                destination_payload = await client_c_for_counts.get_order_details(str(item["venda_c_id"]))
                 fields = _comparison_fields(payload, destination_payload)
                 item["divergence_count"] = len([field for field in fields if field["divergent"]])
             except Exception as exc:
@@ -1160,9 +1174,10 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
 
 @app.get("/admin/orders-panel/detail")
 async def admin_orders_panel_detail(venda_a_id: str | None = None, venda_c_id: str | None = None, job_id: int | None = None):
-    from app.db import get_pool
+    from app.db import get_pool, upsert_orders_c_fetched, upsert_orders_c_fetch_error
     p = await get_pool()
     origin_payload = {}
+    destination_snapshot_payload = {}
     mapping = None
     related_jobs = []
 
@@ -1187,6 +1202,14 @@ async def admin_orders_panel_detail(venda_a_id: str | None = None, venda_c_id: s
             """, str(venda_a_id))
             if mapping and not venda_c_id:
                 venda_c_id = str(mapping["venda_c_id"]) if mapping["venda_c_id"] else None
+        if venda_c_id:
+            destination_row = await conn.fetchrow("""
+                SELECT fetched_payload
+                FROM public.orders_c_snapshot
+                WHERE venda_c_id = $1
+            """, str(venda_c_id))
+            if destination_row:
+                destination_snapshot_payload = _json_payload(destination_row["fetched_payload"])
         related_jobs = await conn.fetch("""
             SELECT id, job_type, status, attempts, last_error, action_preview, created_at, updated_at
             FROM public.jobs
@@ -1205,10 +1228,14 @@ async def admin_orders_panel_detail(venda_a_id: str | None = None, venda_c_id: s
             token = await ensure_access_token("B")
             if token:
                 destination_payload = await TinyClient(token).get_order_details(str(venda_c_id))
+                await upsert_orders_c_fetched(str(venda_c_id), destination_payload)
             else:
                 destination_error = "Token do Tiny destino indisponível."
         except Exception as exc:
+            await upsert_orders_c_fetch_error(str(venda_c_id), getattr(exc, "status_code", None), str(exc))
             destination_error = str(exc)
+        if not destination_payload and destination_snapshot_payload:
+            destination_payload = destination_snapshot_payload
 
     comparison_fields = _comparison_fields(origin_payload, destination_payload) if destination_payload else _comparison_fields(origin_payload, {})
     divergence_count = len([field for field in comparison_fields if field["divergent"]])

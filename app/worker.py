@@ -16,6 +16,8 @@ from app.db import (
     upsert_orders_a_snapshot,
     upsert_orders_a_fetched,
     upsert_orders_a_fetch_error,
+    upsert_orders_c_fetched,
+    upsert_orders_c_fetch_error,
     upsert_orders_map_with_c,
     get_order_a_snapshot,
     get_snapshot_fetched_at,
@@ -93,6 +95,23 @@ async def call_tiny(account: str, client: TinyClient, method: str, *args, **kwar
             raise
         new_client = TinyClient(new_token)
         return await getattr(new_client, method)(*args, **kwargs)
+
+
+async def refresh_order_c_snapshot(client_c: TinyClient, venda_c_id: str, account: str = "B") -> dict | None:
+    try:
+        details = await call_tiny(account, client_c, "get_order_details", str(venda_c_id))
+        await upsert_orders_c_fetched(str(venda_c_id), details)
+        return details
+    except TinyApiError as exc:
+        await upsert_orders_c_fetch_error(str(venda_c_id), exc.status_code, exc.body)
+        logger.warning(f"Failed to refresh C snapshot for order {venda_c_id}: {exc.body[:160]}")
+    except RateLimitError as exc:
+        await upsert_orders_c_fetch_error(str(venda_c_id), exc.status_code, str(exc))
+        logger.warning(f"Skipped C snapshot refresh for order {venda_c_id}: rate limit")
+    except Exception as exc:
+        await upsert_orders_c_fetch_error(str(venda_c_id), None, str(exc))
+        logger.warning(f"Failed to refresh C snapshot for order {venda_c_id}: {exc}")
+    return None
 
 
 PRODUTO_ID_MAP: dict[int, int] = {}
@@ -584,6 +603,8 @@ async def process_job(job: dict) -> None:
             venda_c_id = str(result.get('id') or result.get('numeroPedido') or '')
             
             await upsert_orders_map_with_c(external_key=external_key, venda_a_id=str(venda_id), venda_c_id=venda_c_id)
+            if venda_c_id:
+                await refresh_order_c_snapshot(client_c, venda_c_id)
             
             tag_added = False
             tag_job_created = False
@@ -827,6 +848,12 @@ async def process_job(job: dict) -> None:
             client_target = TinyClient(target_token)
             
             await call_tiny(target_source, client_target, "update_order_status", target_id, situacao_int)
+            if target_source == "B":
+                await refresh_order_c_snapshot(client_target, target_id)
+            elif source == "B":
+                source_token = await ensure_access_token("B")
+                if source_token:
+                    await refresh_order_c_snapshot(TinyClient(source_token), str(venda_id))
             
             if source == "A":
                 await update_orders_map_sync(str(venda_id), target_id, codigo_situacao)
@@ -1066,7 +1093,7 @@ async def process_job(job: dict) -> None:
                 await update_job_failed(job_id, "No valid OAuth token for B", attempts)
                 return
             client_c = TinyClient(token_c)
-            c_details = await call_tiny("B", client_c, "get_order_details", venda_c_id_str)
+            c_details = await refresh_order_c_snapshot(client_c, venda_c_id_str) or {}
             transportador_c = (c_details.get("transportador") or {}) if isinstance(c_details, dict) else {}
             codigo_rastreio = (transportador_c.get("codigoRastreamento") or "").strip()
             url_rastreio = (transportador_c.get("urlRastreamento") or "").strip()

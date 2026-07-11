@@ -131,6 +131,18 @@ async def init_db():
                     updated_at TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS public.orders_c_snapshot (
+                    id SERIAL PRIMARY KEY,
+                    venda_c_id TEXT UNIQUE NOT NULL,
+                    fetched_payload JSONB,
+                    fetched_at TIMESTAMPTZ,
+                    last_error JSONB,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
             
             try:
                 await conn.execute("ALTER TABLE public.orders_map ADD COLUMN IF NOT EXISTS last_sync_status TEXT")
@@ -774,6 +786,45 @@ async def upsert_orders_a_fetch_error(venda_a_id: str, status_code: int, error_b
                 last_error = $2::jsonb,
                 updated_at = NOW()
         """, venda_a_id, last_error)
+
+
+async def upsert_orders_c_fetched(venda_c_id: str, fetched_payload: dict) -> None:
+    p = await get_pool()
+    payload_str = json.dumps(fetched_payload)
+    async with p.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO public.orders_c_snapshot (venda_c_id, fetched_payload, fetched_at, last_error, updated_at)
+            VALUES ($1::text, $2::jsonb, NOW(), NULL, NOW())
+            ON CONFLICT (venda_c_id) DO UPDATE SET
+                fetched_payload = EXCLUDED.fetched_payload,
+                fetched_at = NOW(),
+                last_error = NULL,
+                updated_at = NOW()
+        """, venda_c_id, payload_str)
+
+
+async def upsert_orders_c_fetch_error(venda_c_id: str, status_code: int | None, error_body: str) -> None:
+    p = await get_pool()
+    last_error = json.dumps({"status_code": status_code, "body": str(error_body)[:500], "at": datetime.utcnow().isoformat()})
+    async with p.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO public.orders_c_snapshot (venda_c_id, last_error, updated_at)
+            VALUES ($1::text, $2::jsonb, NOW())
+            ON CONFLICT (venda_c_id) DO UPDATE SET
+                last_error = $2::jsonb,
+                updated_at = NOW()
+        """, venda_c_id, last_error)
+
+
+async def get_order_c_snapshot(venda_c_id: str) -> dict | None:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT venda_c_id, fetched_payload, fetched_at, last_error, created_at, updated_at
+            FROM public.orders_c_snapshot
+            WHERE venda_c_id = $1
+        """, venda_c_id)
+        return dict(row) if row else None
 
 
 async def upsert_orders_map_with_c(external_key: str, venda_a_id: str, venda_c_id: str | None) -> None:

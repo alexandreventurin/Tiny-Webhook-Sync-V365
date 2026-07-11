@@ -711,6 +711,162 @@ def _normalize_address(address: dict) -> dict:
     }
 
 
+STATUS_LABELS = {
+    "em_aberto": "em aberto",
+    "faturado": "faturado",
+    "cancelado": "cancelado",
+    "aprovado": "aprovado",
+    "preparando_envio": "preparando envio",
+    "enviado": "enviado",
+    "entregue": "entregue",
+    "pronto_envio": "pronto envio",
+    "dados_incompletos": "dados incompletos",
+    "nao_entregue": "não entregue",
+}
+
+
+def _status_label(value) -> str | None:
+    normalized = normalize_status(value)
+    if not normalized:
+        return None
+    return STATUS_LABELS.get(normalized, str(normalized).replace("_", " "))
+
+
+def _format_order_date(value) -> str | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    for separator in ("T", " "):
+        if separator in text:
+            text = text.split(separator)[0]
+    try:
+        return datetime.fromisoformat(text).strftime("%d/%m/%Y")
+    except Exception:
+        pass
+    if len(text) == 10 and text[4] == "-" and text[7] == "-":
+        return f"{text[8:10]}/{text[5:7]}/{text[0:4]}"
+    return text
+
+
+def _money_value(value):
+    if value in (None, ""):
+        return None
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return value
+
+
+def _order_display_fields(payload: dict) -> dict:
+    payload = payload if isinstance(payload, dict) else {}
+    cliente = payload.get("cliente") if isinstance(payload.get("cliente"), dict) else {}
+    ecommerce = payload.get("ecommerce") if isinstance(payload.get("ecommerce"), dict) else {}
+    endereco_entrega = payload.get("enderecoEntrega") if isinstance(payload.get("enderecoEntrega"), dict) else {}
+    forma_envio = payload.get("formaEnvio") if isinstance(payload.get("formaEnvio"), dict) else {}
+    forma_frete = payload.get("formaFrete") if isinstance(payload.get("formaFrete"), dict) else {}
+    transportador = payload.get("transportador") if isinstance(payload.get("transportador"), dict) else {}
+    nota_fiscal = payload.get("notaFiscal") if isinstance(payload.get("notaFiscal"), dict) else {}
+    itens = payload.get("itens") if isinstance(payload.get("itens"), list) else []
+
+    total_produtos = _first_present(
+        payload.get("valorProdutos"),
+        payload.get("totalProdutos"),
+        payload.get("valor_total_produtos"),
+    )
+    if total_produtos is None and itens:
+        total = 0
+        for item in itens:
+            if not isinstance(item, dict):
+                continue
+            qtd = item.get("quantidade") or 0
+            unit = item.get("valorUnitario") or item.get("valor_unitario") or 0
+            try:
+                total += float(qtd) * float(unit)
+            except (TypeError, ValueError):
+                pass
+        total_produtos = total if total else None
+
+    return {
+        "nota_fiscal": _first_present(nota_fiscal.get("numero"), payload.get("numeroNotaFiscal"), payload.get("idNotaFiscal")),
+        "numero_pedido": _first_present(payload.get("numero"), payload.get("numeroPedido")),
+        "id_pedido": payload.get("id"),
+        "data": _format_order_date(_first_present(payload.get("data"), payload.get("dataPedido"), payload.get("dataCriacao"))),
+        "nome": cliente.get("nome"),
+        "cpf": cliente.get("cpfCnpj") or cliente.get("cpf_cnpj"),
+        "situacao": _status_label(payload.get("situacao")),
+        "cep_entrega": endereco_entrega.get("cep"),
+        "cidade_entrega": endereco_entrega.get("municipio") or endereco_entrega.get("cidade"),
+        "uf_entrega": endereco_entrega.get("uf"),
+        "numero_endereco": endereco_entrega.get("numero"),
+        "complemento_endereco": endereco_entrega.get("complemento"),
+        "itens": len(itens),
+        "total_produtos": _money_value(total_produtos),
+        "forma_envio": _first_present(forma_envio.get("nome"), forma_envio.get("descricao"), forma_envio.get("formaEnvio")),
+        "forma_frete": _first_present(forma_frete.get("nome"), forma_frete.get("descricao"), forma_frete.get("formaFrete")),
+        "codigo_rastreamento": _first_present(
+            payload.get("codigoRastreamento"),
+            payload.get("codigo_rastreamento"),
+            payload.get("rastreamento"),
+            transportador.get("codigoRastreamento"),
+            transportador.get("codigo_rastreamento"),
+        ),
+        "ecommerce_nome": _first_present(
+            ecommerce.get("nome"),
+            ecommerce.get("nomeEcommerce"),
+            ecommerce.get("canalVenda"),
+            ecommerce.get("plataforma"),
+            payload.get("ecommerceNome"),
+        ),
+        "numero_ecommerce": _first_present(
+            ecommerce.get("numeroPedidoEcommerce"),
+            ecommerce.get("numeroPedido"),
+            ecommerce.get("pedido"),
+            payload.get("numeroPedidoEcommerce"),
+            payload.get("numeroOrdemCompra"),
+        ),
+    }
+
+
+def _comparison_fields(origin: dict, destination: dict) -> list[dict]:
+    origin_fields = _order_display_fields(origin)
+    destination_fields = _order_display_fields(destination)
+    definitions = [
+        ("nota_fiscal", "Nota fiscal", False),
+        ("numero_pedido", "Número do pedido", False),
+        ("id_pedido", "ID do pedido", False),
+        ("data", "Data", False),
+        ("nome", "Nome", True),
+        ("cpf", "CPF/CNPJ", True),
+        ("situacao", "Situação", True),
+        ("cep_entrega", "CEP entrega", True),
+        ("cidade_entrega", "Cidade", True),
+        ("uf_entrega", "UF", True),
+        ("numero_endereco", "Nº endereço", True),
+        ("complemento_endereco", "Complemento", True),
+        ("itens", "Itens", True),
+        ("total_produtos", "Total dos produtos", True),
+        ("forma_envio", "Forma de envio", True),
+        ("forma_frete", "Forma de frete", True),
+        ("codigo_rastreamento", "Código de rastreamento", True),
+        ("ecommerce_nome", "Nome do ecommerce", False),
+        ("numero_ecommerce", "Número no ecommerce", True),
+    ]
+    rows = []
+    for key, label, compare in definitions:
+        origin_value = origin_fields.get(key)
+        destination_value = destination_fields.get(key)
+        differs = _normalize_text(origin_value) != _normalize_text(destination_value)
+        rows.append({
+            "key": key,
+            "label": label,
+            "origin": origin_value,
+            "destination": destination_value,
+            "differs": differs,
+            "divergent": bool(compare and differs),
+        })
+    return rows
+
+
 def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None = None) -> dict:
     mapped_product_ids = mapped_product_ids or set()
     payload = _json_payload(row.get("fetched_payload")) or _json_payload(row.get("webhook_payload"))
@@ -809,7 +965,8 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
         "cpf_cnpj": cliente.get("cpfCnpj"),
         "situacao": payload.get("situacao"),
         "situacao_normalized": status_normalized,
-        "data": payload.get("data") or payload.get("dataPedido"),
+        "situacao_label": _status_label(payload.get("situacao")),
+        "data": _format_order_date(payload.get("data") or payload.get("dataPedido")),
         "hora": _first_present(payload.get("hora"), payload.get("horaPedido"), payload.get("horario")),
         "data_hora": _first_present(
             payload.get("dataHora"),
@@ -923,14 +1080,20 @@ async def admin_orders_panel_data(limit: int = 120):
     for row in synced_rows:
         item = dict(row)
         payload = _json_payload(item.get("fetched_payload"))
-        cliente = payload.get("cliente") if isinstance(payload, dict) else {}
-        ecommerce = payload.get("ecommerce") if isinstance(payload, dict) else {}
-        item["cliente"] = cliente.get("nome") if isinstance(cliente, dict) else None
-        item["numero"] = payload.get("numero") or payload.get("numeroPedido") if isinstance(payload, dict) else None
-        item["numero_ecommerce"] = ecommerce.get("numeroPedidoEcommerce") if isinstance(ecommerce, dict) else None
+        origin_summary = _order_summary_from_snapshot({
+            "venda_a_id": str(item.get("venda_a_id") or ""),
+            "fetched_payload": payload,
+            "updated_at": item.get("updated_at"),
+        }, mapped_product_ids)
+        item.update(origin_summary)
+        destination_status = normalize_status(item.get("last_sync_status")) or "em_aberto"
+        item["situacao_destino"] = destination_status
+        item["situacao_destino_label"] = _status_label(destination_status)
         item["situacao_a"] = payload.get("situacao") if isinstance(payload, dict) else None
+        item["situacao_a_label"] = _status_label(item.get("situacao_a"))
         item["last_job_status"] = item.get("last_sync_status")
         item["action_preview"] = {}
+        item["divergence_count"] = None
         synced.append(item)
 
     errors = []
@@ -1003,6 +1166,9 @@ async def admin_orders_panel_detail(venda_a_id: str | None = None, venda_c_id: s
         except Exception as exc:
             destination_error = str(exc)
 
+    comparison_fields = _comparison_fields(origin_payload, destination_payload) if destination_payload else _comparison_fields(origin_payload, {})
+    divergence_count = len([field for field in comparison_fields if field["divergent"]])
+
     return {
         "venda_a_id": venda_a_id,
         "venda_c_id": venda_c_id,
@@ -1010,7 +1176,9 @@ async def admin_orders_panel_detail(venda_a_id: str | None = None, venda_c_id: s
         "origin": origin_payload,
         "destination": destination_payload,
         "destination_error": destination_error,
-        "differences": _diff_orders(origin_payload, destination_payload) if destination_payload else [],
+        "fields": comparison_fields,
+        "divergence_count": divergence_count,
+        "differences": [field for field in comparison_fields if field["divergent"]],
         "jobs": [dict(row) for row in related_jobs],
     }
 

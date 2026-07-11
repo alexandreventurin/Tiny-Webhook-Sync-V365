@@ -77,11 +77,11 @@ const esc=v=>String(fmt(v)).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'
 const textOf=o=>JSON.stringify(o||{}).toLowerCase();
 
 function badge(label,type='muted'){return `<span class="badge ${type}">${esc(label)}</span>`}
-function shippingCell(x,highlight=false){
+function shippingCell(x,compare=false){
   const shipping=x.forma_envio||x.forma_frete;
   const tracking=x.codigo_rastreamento;
-  const shippingClass=highlight&&shipping?'attention':'';
-  const trackingClass=highlight&&tracking?'attention':'';
+  const shippingClass=compare&&x.forma_envio_divergent?'attention':'';
+  const trackingClass=compare&&x.codigo_rastreamento_divergent?'attention':'';
   return `<span class="${shippingClass}">${esc(shipping||'-')}</span><div class="small mono ${trackingClass}">${esc(tracking||'sem rastreio')}</div>${x.endereco_faturamento_diferente_entrega?badge('entrega diferente','info'):''}`;
 }
 function nfTitle(x){return x.nota_fiscal_destino?`NF ${x.nota_fiscal_destino}`:'NF -'}

@@ -1140,6 +1140,13 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
         item["nota_fiscal_destino"] = destination_fields.get("nota_fiscal")
         item["numero_destino"] = destination_fields.get("numero_pedido")
         item["destination_snapshot_at"] = item.get("fetched_at_c")
+        item["forma_envio_divergent"] = (
+            _normalize_text(origin_summary.get("forma_envio")) != _normalize_text(destination_fields.get("forma_envio"))
+            or _normalize_text(origin_summary.get("forma_frete")) != _normalize_text(destination_fields.get("forma_frete"))
+        )
+        item["codigo_rastreamento_divergent"] = (
+            _normalize_text(origin_summary.get("codigo_rastreamento")) != _normalize_text(destination_fields.get("codigo_rastreamento"))
+        )
         item["situacao_a"] = payload.get("situacao") if isinstance(payload, dict) else None
         item["situacao_a_label"] = _status_label(item.get("situacao_a"))
         item["last_job_status"] = item.get("last_sync_status")

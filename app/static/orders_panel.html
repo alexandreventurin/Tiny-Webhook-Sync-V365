@@ -6,9 +6,10 @@
 <title>Pedidos - Tiny Integrator</title>
 <style>
 *{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f4f6f8;color:#172033;min-height:100vh}
-.topbar{height:58px;background:#172033;color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 22px;border-bottom:1px solid #0f172a}
+.topbar{height:58px;background:#172033;color:#fff;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:0 22px;border-bottom:1px solid #0f172a}
 .brand{display:flex;align-items:baseline;gap:12px}.brand h1{margin:0;font-size:17px;font-weight:700}.brand span{font-size:12px;color:#9fb0c5}
 .nav{display:flex;align-items:center;gap:10px}.nav a,.nav button{border:0;background:#26364a;color:#dbe7f5;border-radius:6px;padding:8px 11px;text-decoration:none;font-size:13px;cursor:pointer}.nav button:hover,.nav a:hover{background:#334a65;color:#fff}
+.auth-mini{display:flex;align-items:center;gap:8px;flex:1;justify-content:center;min-width:0}.auth-mini-card{display:flex;align-items:center;gap:7px;min-width:155px;max-width:230px;height:34px;border:1px solid rgba(255,255,255,.16);background:#26364a;border-radius:7px;padding:0 8px;color:#dbe7f5}.auth-mini-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}.auth-mini-card.ok .auth-mini-dot{background:#22c55e}.auth-mini-card.expired .auth-mini-dot{background:#ef4444}.auth-mini-card.missing .auth-mini-dot{background:#94a3b8}.auth-mini-text{min-width:0;flex:1}.auth-mini-name{font-size:11px;font-weight:800;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.auth-mini-detail{font-size:10px;color:#aebdd0;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.auth-mini-link{border:0;background:#334a65;color:#fff;border-radius:5px;padding:5px 7px;text-decoration:none;font-size:10px;font-weight:800;white-space:nowrap}.auth-mini-link:hover{background:#3f5877}
 .wrap{max-width:1380px;margin:0 auto;padding:18px}
 .toolbar{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;margin-bottom:10px}.search{height:40px;border:1px solid #cbd5e1;border-radius:6px;padding:0 12px;font-size:14px;background:#fff}.actions{display:flex;gap:8px}.actions button,.reviewbar button{height:40px;border:1px solid #b6c2d1;background:#fff;border-radius:6px;padding:0 12px;font-size:13px;cursor:pointer;color:#26364a}.actions button:hover,.reviewbar button:hover{background:#eef4fb}.reviewbar{display:flex;justify-content:flex-end;margin:0 0 10px}.reviewbar button:disabled{opacity:.45;cursor:not-allowed}.filters{display:none;grid-template-columns:repeat(4,minmax(160px,1fr));gap:10px;margin-bottom:14px}.filters.open{display:grid}.filters label{font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.04em}.filters select,.filters input{width:100%;height:36px;border:1px solid #cbd5e1;border-radius:6px;padding:0 10px;background:#fff;color:#172033}
 .tabs{display:flex;gap:6px;border-bottom:1px solid #cbd5e1;margin-bottom:12px;overflow:auto}.tab{border:0;background:transparent;color:#536274;padding:12px 14px;font-size:14px;font-weight:700;cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap}.tab.active{color:#10243e;border-bottom-color:#2563eb}
@@ -16,17 +17,18 @@
 .summary{display:grid;gap:10px;margin-bottom:14px}.summary-period{display:flex;justify-content:flex-start;align-items:center;gap:8px;color:#536274;font-size:13px;font-weight:700}.period-pill{display:inline-flex;align-items:center;min-height:26px;border:1px solid #bfd7ff;background:#eaf2ff;color:#17437a;border-radius:6px;padding:0 9px;font-size:12px;font-weight:800}.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px}.metric{border:1px solid #d9e1ea;border-radius:8px;padding:12px;min-height:92px;display:flex;flex-direction:column;justify-content:space-between}.metric .value{font-size:25px;font-weight:800;color:#172033}.metric .label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#334155;margin-top:3px}.metric.blue{background:#cfe3ff;border-color:#7fb2ff}.metric.green{background:#c8f0d6;border-color:#75d994}.metric.orange{background:#ffe0b3;border-color:#ffb75d}.metric.gray{background:#dde5ef;border-color:#acb8c8}.metric.red{background:#ffd1d1;border-color:#ff8a8a}.metric.purple{background:#ded2ff;border-color:#ad93ff}.metric.teal{background:#c5f0e9;border-color:#67d4c7}.metric button{align-self:flex-start;margin-top:8px;height:26px;border:1px solid rgba(15,23,42,.12);background:#fff;border-radius:6px;padding:0 9px;font-size:12px;font-weight:700;color:#26364a;cursor:pointer}.metric button:hover{background:#f8fafc}
 .panel{background:#fff;border:1px solid #d9e1ea;border-radius:8px;overflow:hidden}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:13px}th{background:#f8fafc;color:#6b7b8d;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:10px;border-bottom:1px solid #d9e1ea;white-space:nowrap}td{padding:11px 10px;border-bottom:1px solid #eef2f6;vertical-align:top}tbody tr{cursor:pointer}tbody tr:hover td{background:#f8fbff}
 .badge{display:inline-flex;align-items:center;min-height:22px;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap}.ok{background:#dcfce7;color:#166534}.warn{background:#fff7ed;color:#c2410c}.bad{background:#fee2e2;color:#b91c1c}.info{background:#dbeafe;color:#1d4ed8}.muted{background:#eef2f7;color:#536274}
-.reason{display:flex;gap:5px;flex-wrap:wrap}.empty{padding:36px;text-align:center;color:#7a899a;font-size:14px}.small{font-size:12px;color:#6b7b8d}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.attention{color:#be123c;font-weight:800}.erp-link{color:#172033;text-decoration:none}.erp-link:hover{color:#2563eb;text-decoration:underline}.selectcol{width:36px;text-align:center}.flow-dot{display:inline-block;font-size:22px;line-height:1;margin-right:7px;vertical-align:middle}.flow-in{color:#d97706}.flow-out{color:#16a34a}.queue-group td{background:#f1f5f9!important;color:#26364a;font-weight:800;border-top:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1}.queue-meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.queue-chip{display:inline-flex;align-items:center;gap:6px;min-height:28px;border-radius:999px;padding:3px 10px;font-size:12px;font-weight:800;border:1px solid #cbd5e1;background:#fff;color:#26364a;white-space:nowrap}.queue-chip.time{background:#dbeafe;border-color:#93c5fd;color:#1d4ed8}.queue-chip.exec{background:#dcfce7;border-color:#86efac;color:#166534}.queue-chip.limit{background:#fef3c7;border-color:#fbbf24;color:#92400e}.queue-plus{background:#1d4ed8;color:#fff;border-radius:999px;padding:2px 7px;font-size:11px}
+.reason{display:flex;gap:5px;flex-wrap:wrap}.empty{padding:36px;text-align:center;color:#7a899a;font-size:14px}.small{font-size:12px;color:#6b7b8d}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.attention{color:#be123c;font-weight:800}.erp-link{color:#172033;text-decoration:none}.erp-link:hover{color:#2563eb;text-decoration:underline}.selectcol{width:36px;text-align:center}.flow-dot{display:inline-block;font-size:22px;line-height:1;margin-right:7px;vertical-align:middle}.flow-in{color:#d97706}.flow-out{color:#16a34a}.queue-group td{background:#f1f5f9!important;color:#26364a;font-weight:800;border-top:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1}.queue-meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.queue-chip{display:inline-flex;align-items:center;gap:6px;min-height:28px;border-radius:999px;padding:3px 10px;font-size:12px;font-weight:800;border:1px solid #cbd5e1;background:#fff;color:#26364a;white-space:nowrap}.queue-chip.time{background:#dbeafe;border-color:#93c5fd;color:#1d4ed8}.queue-chip.exec{background:#dcfce7;border-color:#86efac;color:#166534}.queue-chip.limit{background:#fef3c7;border-color:#fbbf24;color:#92400e}.queue-plus{background:#1d4ed8;color:#fff;border-radius:999px;padding:2px 7px;font-size:11px}.load-more{display:flex;justify-content:center;padding:14px;background:#fff}.load-more button{height:36px;border:1px solid #b6c2d1;background:#fff;border-radius:6px;padding:0 14px;font-size:13px;font-weight:700;color:#26364a;cursor:pointer}.load-more button:hover{background:#eef4fb}
 .drawer-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.3);display:none}.drawer-backdrop.open{display:block}.drawer{position:fixed;top:0;right:0;width:min(960px,100vw);height:100vh;background:#fff;box-shadow:-16px 0 50px rgba(15,23,42,.22);display:flex;flex-direction:column;transform:translateX(100%);transition:transform .2s ease}.drawer.open{transform:translateX(0)}
 .drawer-head{height:58px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #d9e1ea;padding:0 16px}.drawer-head h2{font-size:16px;margin:0}.drawer-head button{border:1px solid #cbd5e1;background:#fff;border-radius:6px;height:34px;width:38px;font-size:20px;cursor:pointer;color:#334155}
 .drawer-body{overflow:auto;padding:14px}.compare{display:grid;grid-template-columns:1fr 1fr;gap:12px}.box{border:1px solid #d9e1ea;border-radius:8px;overflow:hidden;background:#fbfdff}.box h3{margin:0;padding:10px 12px;font-size:13px;background:#f8fafc;border-bottom:1px solid #d9e1ea}.fields{padding:8px 12px;display:grid;gap:8px}.field{display:grid;grid-template-columns:150px 1fr;gap:8px;font-size:13px}.field label{color:#6b7b8d;font-size:12px}.diffs{margin-top:12px;border:1px solid #fed7aa;background:#fff7ed;border-radius:8px;overflow:hidden}.diffs h3{margin:0;padding:10px 12px;font-size:13px;border-bottom:1px solid #fed7aa}.diff-row{display:grid;grid-template-columns:170px 1fr 1fr;gap:10px;padding:10px 12px;border-bottom:1px solid #ffedd5;font-size:12px}.diff-row:last-child{border-bottom:0}.diff-row.divergent{background:#fff1f2;border-bottom-color:#fecdd3}.diff-row.divergent strong{color:#be123c}.detail-total{margin-top:12px;padding:12px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;font-size:13px;font-weight:700}.pre{white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;max-height:280px;overflow:auto;background:#0f172a;color:#dbeafe;border-radius:6px;padding:10px}
 .loading{opacity:.55;pointer-events:none}
-@media(max-width:760px){.topbar{height:auto;gap:10px;align-items:flex-start;flex-direction:column;padding:14px}.toolbar{grid-template-columns:1fr}.summary-grid{grid-template-columns:repeat(2,1fr)}.compare{grid-template-columns:1fr}.field,.diff-row{grid-template-columns:1fr}.wrap{padding:12px}th:nth-child(4),td:nth-child(4){display:none}}
+@media(max-width:760px){.topbar{height:auto;gap:10px;align-items:flex-start;flex-direction:column;padding:14px}.auth-mini{width:100%;justify-content:flex-start;flex-wrap:wrap}.toolbar{grid-template-columns:1fr}.summary-grid{grid-template-columns:repeat(2,1fr)}.compare{grid-template-columns:1fr}.field,.diff-row{grid-template-columns:1fr}.wrap{padding:12px}th:nth-child(4),td:nth-child(4){display:none}}
 </style>
 </head>
 <body>
 <header class="topbar">
   <div class="brand"><h1>Gestão de Pedidos</h1><span>Tiny Integrator</span></div>
+  <div class="auth-mini" id="authMini"></div>
   <nav class="nav">
     <a href="/dashboard">Dashboard</a>
     <a href="/import">Importação</a>
@@ -53,7 +55,7 @@
   </section>
   <section class="summary" id="summary"></section>
   <section class="tabs">
-    <button class="tab" data-tab="queue">Fila de Espera</button>
+    <button class="tab" data-tab="queue">Fila de Execuções</button>
     <button class="tab active" data-tab="origin">Pedidos na origem</button>
     <button class="tab" data-tab="synced">Pedidos sincronizados</button>
     <button class="tab" data-tab="errors">Tentativas com erro</button>
@@ -73,13 +75,14 @@
   <div class="drawer-body" id="drawerBody"></div>
 </aside>
 <script>
-const state={tab:'origin',subtab:'valid',query:'',data:null,selectedCancelled:new Set(),filters:{days:'30',divergence:'',ecommerce:'',originStatus:'',queueWindow:'',queueTask:'',queueStatus:''}};
+const state={tab:'origin',subtab:'valid',query:'',data:null,events:[],auth:{tokens:[],health:{}},selectedCancelled:new Set(),pageSizes:{},filters:{days:'30',divergence:'',ecommerce:'',originStatus:'',queueWindow:'',queueTask:'',queueStatus:''}};
 const $=id=>document.getElementById(id);
 const fmt=v=>v===null||v===undefined||v===''?'—':String(v);
 const date=v=>v?new Date(v).toLocaleString('pt-BR'):'—';
 const dateOnly=v=>v?String(v):'—';
 const esc=v=>String(fmt(v)).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const textOf=o=>JSON.stringify(o||{}).toLowerCase();
+const PAGE_STEP=20;
 
 function badge(label,type='muted'){return `<span class="badge ${type}">${esc(label)}</span>`}
 function statusText(s){return s==='concluido'?'Concluído':(s==='aguardando'?'Aguardando':(s==='erro'?'Erro':fmt(s)))}
@@ -117,11 +120,20 @@ function matchesFilters(item){
 async function load(){
   document.body.classList.add('loading');
   try{
-    const res=await fetch(`/admin/orders-panel/data?limit=3000&days=${encodeURIComponent(state.filters.days)}&divergence_limit=80`);
+    const [res,eventsRes,tokensRes,healthRes]=await Promise.all([
+      fetch(`/admin/orders-panel/data?limit=3000&days=${encodeURIComponent(state.filters.days)}&divergence_limit=80`),
+      fetch('/admin/events?limit=200').catch(()=>null),
+      fetch('/admin/tokens').catch(()=>null),
+      fetch('/admin/tokens/health').catch(()=>null)
+    ]);
     if(res.status===401){location.href='/login?next=/orders-panel';return}
     if(!res.ok)throw new Error('Falha ao carregar pedidos: '+res.status);
     state.data=await res.json();
+    state.events=eventsRes&&eventsRes.ok?(await eventsRes.json()).events||[]:[];
+    state.auth.tokens=tokensRes&&tokensRes.ok?(await tokensRes.json()).tokens||[]:[];
+    state.auth.health=healthRes&&healthRes.ok?await healthRes.json():{};
     render();
+    renderAuthMini();
   }catch(err){
     $('summary').innerHTML='';
     $('subtabs').innerHTML='';
@@ -136,6 +148,28 @@ function render(){
   renderSummary();
   renderSubtabs();
   renderTable();
+}
+
+function renderAuthMini(){
+  const bar=$('authMini');
+  if(!bar)return;
+  const tokens={A:null,B:null};
+  (state.auth.tokens||[]).forEach(t=>tokens[t.account]=t);
+  const labels={A:'Rejuderme',B:'V.365'};
+  const paths={A:'/auth/a/start',B:'/auth/c/start'};
+  bar.innerHTML=['A','B'].map(acc=>{
+    const t=tokens[acc];
+    const h=state.auth.health?.[acc];
+    let cls='missing', status='Sem conexão', detail='Reconectar';
+    if(t){
+      const expires=t.expires_at?new Date(t.expires_at):null;
+      const valid=expires&&expires>new Date();
+      if(!valid){cls='expired';status='Expirado';}
+      else if(h&&h.ok===false){cls='expired';status=h.status_code===401?'Token inválido':'Falha';}
+      else{cls='ok';status='Conectado';}
+    }
+    return `<div class="auth-mini-card ${cls}"><span class="auth-mini-dot"></span><div class="auth-mini-text"><div class="auth-mini-name">Tiny ${esc(labels[acc])}</div><div class="auth-mini-detail">${esc(status)}</div></div><a class="auth-mini-link" href="${paths[acc]}" target="_blank">${detail}</a></div>`;
+  }).join('');
 }
 
 function renderFilterOptions(){
@@ -181,10 +215,11 @@ function renderSubtabs(){
     const queue=d.queue?.items||[];
     const sequence=queue.filter(x=>!x.is_future);
     const future=queue.filter(x=>x.is_future);
-    if(!['sequence','future'].includes(state.subtab))state.subtab='sequence';
+    if(!['sequence','future','webhooks'].includes(state.subtab))state.subtab='sequence';
     $('subtabs').innerHTML=[
       `<button class="subtab ${state.subtab==='sequence'?'active':''}" data-subtab="sequence">Em sequência (${sequence.length})</button>`,
-      `<button class="subtab ${state.subtab==='future'?'active':''}" data-subtab="future">Futuros (${future.length})</button>`
+      `<button class="subtab ${state.subtab==='future'?'active':''}" data-subtab="future">Futuros (${future.length})</button>`,
+      `<button class="subtab ${state.subtab==='webhooks'?'active':''}" data-subtab="webhooks">Webhooks (${state.events.length})</button>`
     ].join('');
   }else if(state.tab==='origin'){
     const items=[
@@ -219,6 +254,20 @@ function table(headers,rows){
   if(!rows.length)return '<div class="empty">Nenhum pedido encontrado.</div>';
   return `<table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`;
 }
+
+function viewKey(extra=''){
+  return `${state.tab}:${state.subtab}:${state.query}:${state.filters.days}:${state.filters.divergence}:${state.filters.ecommerce}:${state.filters.originStatus}:${state.filters.queueWindow}:${state.filters.queueTask}:${state.filters.queueStatus}:${extra}`;
+}
+function visibleList(list,extra=''){
+  const key=viewKey(extra);
+  const size=state.pageSizes[key]||PAGE_STEP;
+  return {key,size,items:list.slice(0,size),hasMore:list.length>size,total:list.length};
+}
+function loadMoreHtml(page){
+  const key=JSON.stringify(page.key).replace(/"/g,'&quot;');
+  return page.hasMore?`<div class="load-more"><button onclick="loadMorePage(${key})">Exibir mais 20 (${page.size}/${page.total})</button></div>`:'';
+}
+function loadMorePage(key){state.pageSizes[key]=(state.pageSizes[key]||PAGE_STEP)+PAGE_STEP;renderTable()}
 
 function syncedRows(list,selectable=false){
   return list.map(x=>{
@@ -280,20 +329,33 @@ function bindSyncedRows(){
 }
 
 function renderTable(){
-  const d=state.data||{origin:{valid:[],needs_adjustment:[],do_not_export:[]},synced:[],errors:[],cancelled:{pending:[],reviewed:[]}};
+  const d=state.data||{origin:{valid:[],needs_adjustment:[],do_not_export:[]},synced:[],errors:[],cancelled:{pending:[],reviewed:[]},queue:{items:[]}};
   if(state.tab==='queue'){
+    if(state.subtab==='webhooks'){
+      let list=(state.events||[]).filter(matches);
+      const page=visibleList(list,'webhooks');
+      $('tableWrap').innerHTML=table(['Recebido','Conta','Tipo','Pedido','Situação','Nota fiscal','Ação'],page.items.map(x=>`
+        <tr>
+          <td>${date(x.created_at)}</td>
+          <td>${badge(x.source==='A'?'Rejuderme':'V.365',x.source==='A'?'info':'muted')}</td>
+          <td>${esc(x.topic||'-')}</td>
+          <td class="mono">${esc(x.venda_id||'-')}</td>
+          <td>${esc(x.codigo_situacao||'-')}</td>
+          <td class="mono">${esc(x.id_nota_fiscal||'-')}</td>
+          <td>${badge(x.action_result||'-','muted')}</td>
+        </tr>`))+loadMoreHtml(page);
+      return;
+    }
     let list=(d.queue?.items||[]).filter(x=>state.subtab==='future'?x.is_future:!x.is_future).filter(matches).filter(matchesFilters);
     list=list.slice().sort((a,b)=>new Date(b.scheduled_at||b.updated_at||b.created_at||0)-new Date(a.scheduled_at||a.updated_at||a.created_at||0));
-    $('tableWrap').innerHTML=table(['Origem','Destino','Previsto','Data pedido','Cliente','Ecommerce','Ultima sincronizacao','Tarefa','Status','Erro'],queueRows(list));
+    const page=visibleList(list);
+    $('tableWrap').innerHTML=table(['Origem','Destino','Previsto','Data pedido','Cliente','Ecommerce','Última sincronização','Tarefa','Status','Erro'],queueRows(page.items))+loadMoreHtml(page);
     bindSyncedRows();
   }else if(state.tab==='origin'){
-    const sourceLists={
-      valid:d.origin.valid||[],
-      needs_adjustment:d.origin.needs_adjustment||[],
-      do_not_export:d.origin.do_not_export||[],
-    };
+    const sourceLists={valid:d.origin.valid||[],needs_adjustment:d.origin.needs_adjustment||[],do_not_export:d.origin.do_not_export||[]};
     const list=(sourceLists[state.subtab]||sourceLists.valid).filter(matches).filter(matchesFilters);
-    $('tableWrap').innerHTML=table(['Pedido','Data','Recebido/Enviado','Cliente','Ecommerce','Situação','Envio / Rastreio','Itens','Motivos'],list.map(x=>`
+    const page=visibleList(list);
+    $('tableWrap').innerHTML=table(['Pedido','Data','Recebido/Enviado','Cliente','Ecommerce','Situação','Envio / Rastreio','Itens','Motivos'],page.items.map(x=>`
       <tr data-a="${esc(x.venda_a_id)}">
         <td>${erpLink(x.venda_a_id,`<strong>${esc(x.numero||x.venda_a_id)}</strong><div class="small mono">ID A ${esc(x.venda_a_id)}</div>`)}</td>
         <td>${esc(dateOnly(x.data))}</td>
@@ -304,21 +366,23 @@ function renderTable(){
         <td>${shippingCell(x)}</td>
         <td>${esc(x.itens)}</td>
         <td><div class="reason">${x.reasons.length?x.reasons.map(r=>badge(r,x.export_category==='do_not_export'?'bad':'warn')).join(''):badge('pronto','ok')}</div></td>
-      </tr>`));
+      </tr>`))+loadMoreHtml(page);
     document.querySelectorAll('tr[data-a]').forEach(r=>r.onclick=()=>openDetail({a:r.dataset.a}));
   }else if(state.tab==='synced'){
     let list=d.synced.filter(matches).filter(matchesFilters);
     if(state.subtab!=='all')list=list.filter(x=>(x.situacao_destino_label||x.situacao_destino||'sem status')===state.subtab);
-    $('tableWrap').innerHTML=table(['Origem','Destino','Data','Cliente','Ecommerce','Envio / Rastreio','Última sincronização','Divergências','Job'],syncedRows(list));
+    const page=visibleList(list);
+    $('tableWrap').innerHTML=table(['Origem','Destino','Data','Cliente','Ecommerce','Envio / Rastreio','Última sincronização','Divergências','Job'],syncedRows(page.items))+loadMoreHtml(page);
     bindSyncedRows();
   }else if(state.tab==='cancelled'){
     const source=state.subtab==='reviewed'?(d.cancelled?.reviewed||[]):(d.cancelled?.pending||[]);
     let list=source.filter(matches).filter(matchesFilters);
+    const page=visibleList(list);
     const selectable=state.subtab==='pending';
     const selectedCount=[...state.selectedCancelled].filter(id=>list.some(x=>String(x.venda_a_id)===id)).length;
     const action=selectable?`<div class="reviewbar"><button id="confirmReviewBtn" ${selectedCount?'':'disabled'}>Confirmar análise (${selectedCount})</button></div>`:'';
     const headers=selectable?['<input id="selectAllCancelled" type="checkbox">','Origem','Destino','Data','Cliente','Ecommerce','Envio / Rastreio','Última sincronização','Divergências','Job']:['Origem','Destino','Data','Cliente','Ecommerce','Envio / Rastreio','Última sincronização','Divergências','Job'];
-    $('tableWrap').innerHTML=action+table(headers,syncedRows(list,selectable));
+    $('tableWrap').innerHTML=action+table(headers,syncedRows(page.items,selectable))+loadMoreHtml(page);
     bindSyncedRows();
     document.querySelectorAll('.cancel-check').forEach(cb=>cb.onchange=()=>{cb.checked?state.selectedCancelled.add(String(cb.dataset.a)):state.selectedCancelled.delete(String(cb.dataset.a));renderTable()});
     const all=$('selectAllCancelled');
@@ -328,7 +392,8 @@ function renderTable(){
   }else{
     let list=d.errors.filter(matches);
     if(state.subtab!=='all')list=list.filter(x=>(x.status||'erro')===state.subtab);
-    $('tableWrap').innerHTML=table(['Job','Tipo','Status','Pedido','Tentativas','Erro'],list.map(x=>`
+    const page=visibleList(list);
+    $('tableWrap').innerHTML=table(['Job','Tipo','Status','Pedido','Tentativas','Erro'],page.items.map(x=>`
       <tr data-job="${esc(x.id)}">
         <td class="mono">${esc(x.id)}</td>
         <td class="mono">${esc(x.job_type)}</td>
@@ -336,11 +401,10 @@ function renderTable(){
         <td class="mono">${esc(x.payload.venda_id||x.payload.venda_a_id||x.payload.venda_c_id)}</td>
         <td>${esc(x.attempts||0)}</td>
         <td><div class="small">${esc(x.last_error)}</div></td>
-      </tr>`));
+      </tr>`))+loadMoreHtml(page);
     document.querySelectorAll('tr[data-job]').forEach(r=>r.onclick=()=>openDetail({job:r.dataset.job}));
   }
 }
-
 function pick(o,path){return path.split('.').reduce((a,p)=>a&&a[p],o)}
 function field(label,value){return `<div class="field"><label>${label}</label><div>${esc(value)}</div></div>`}
 function detailRows(fields){

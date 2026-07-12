@@ -1863,7 +1863,7 @@ async def admin_jobs_dashboard(limit: int = 10, status: str | None = None, job_t
 @app.get("/admin/events")
 async def admin_events(limit: int = 5):
     from app.db import get_pool
-    limit = min(limit, 50)
+    limit = max(1, min(limit, 500))
     p = await get_pool()
     async with p.acquire() as conn:
         rows = await conn.fetch("""

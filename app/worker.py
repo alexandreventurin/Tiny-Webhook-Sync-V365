@@ -611,12 +611,14 @@ async def process_job(job: dict) -> None:
             if forma_frete_src:
                 obs_extra += f" | Frete: {forma_frete_src}"
             obs_extra += "]"
+            status_a_normalized = normalize_status(order_data.get('situacao'))
             
             # numeroOrdemCompra recebe o numeroPedidoEcommerce de A (número da Shopify).
             # Se não houver, fica vazio — para tornar perceptível visualmente quando algo
             # deu errado (não fazemos fallback para numeroPedido).
             order_payload_c = {
                 "data": order_data.get('data'),
+                "situacao": 3 if status_a_normalized == "aprovado" else None,
                 "idContato": id_contato_c,
                 "numeroOrdemCompra": str(numero_pedido_ecommerce or ""),
                 "itens": itens_c,
@@ -698,8 +700,7 @@ async def process_job(job: dict) -> None:
                 else:
                     logger.warning(f"Job {job_id}: tag A failed and add_tag_a job was NOT created (dedupe or error)")
 
-            status_a_normalized = normalize_status(order_data.get('situacao'))
-            force_status_c = payload.get('force_status_c') or ("aprovado" if status_a_normalized == "aprovado" else None)
+            force_status_c = payload.get('force_status_c')
             force_status_applied = False
             if force_status_c and venda_c_id:
                 FORCE_SITUACAO_CODE = {"aprovado": 3, "entregue": 6}

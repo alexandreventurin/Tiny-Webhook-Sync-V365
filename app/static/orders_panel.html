@@ -87,6 +87,9 @@ function shippingCell(x,compare=false){
 }
 function nfTitle(x){return x.nota_fiscal_destino?`NF ${x.nota_fiscal_destino}`:'NF -'}
 function erpLink(id,html){return id?`<a class="erp-link" href="https://erp.olist.com/vendas#edit/${encodeURIComponent(id)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${html}</a>`:html}
+function flowCell(x){
+  return `<div><span style="color:#d97706">●</span> Recebido: ${esc(date(x.webhook_received_at))}</div><div class="small"><span style="color:#16a34a">●</span> Envio: ${esc(date(x.transfer_scheduled_at))}</div>`;
+}
 function matches(item){return !state.query||textOf(item).includes(state.query.toLowerCase())}
 function matchesFilters(item){
   if(state.filters.ecommerce && !String(item.ecommerce_nome||'').toLowerCase().includes(state.filters.ecommerce.toLowerCase()))return false;
@@ -208,10 +211,11 @@ function renderTable(){
       do_not_export:d.origin.do_not_export||[],
     };
     const list=(sourceLists[state.subtab]||sourceLists.valid).filter(matches).filter(matchesFilters);
-    $('tableWrap').innerHTML=table(['Pedido','Data','Cliente','Ecommerce','Situação','Envio / Rastreio','Itens','Motivos'],list.map(x=>`
+    $('tableWrap').innerHTML=table(['Pedido','Data','Recebido / Envio','Cliente','Ecommerce','Situação','Envio / Rastreio','Itens','Motivos'],list.map(x=>`
       <tr data-a="${esc(x.venda_a_id)}">
         <td>${erpLink(x.venda_a_id,`<strong>${esc(x.numero||x.venda_a_id)}</strong><div class="small mono">ID A ${esc(x.venda_a_id)}</div>`)}</td>
         <td>${esc(dateOnly(x.data))}</td>
+        <td>${flowCell(x)}</td>
         <td>${esc(x.cliente)}<div class="small">${esc(x.cpf_cnpj)}</div></td>
         <td>${esc(x.ecommerce_nome||'—')}<div class="small mono">${esc(x.numero_ecommerce||'—')}</div></td>
         <td>${badge(x.situacao_label||x.situacao_normalized||x.situacao||'sem status',x.export_category==='valid'?'ok':(x.export_category==='do_not_export'?'bad':'warn'))}</td>

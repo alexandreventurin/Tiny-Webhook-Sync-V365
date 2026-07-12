@@ -1024,6 +1024,9 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
         "endereco_faturamento_diferente_entrega": address_differs,
         "itens": len(itens),
         "updated_at": row.get("updated_at"),
+        "webhook_received_at": row.get("webhook_received_at") or row.get("created_at") or row.get("updated_at"),
+        "approval_scheduled_at": row.get("approval_scheduled_at"),
+        "transfer_scheduled_at": row.get("transfer_scheduled_at") or row.get("approval_scheduled_at"),
         "valid_for_export": export_category == "valid",
         "export_category": export_category,
         "adjustment_reasons": adjustment_reasons,
@@ -1087,9 +1090,37 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
                        END AS order_date
                 FROM public.orders_a_snapshot oas
             )
-            SELECT so.venda_a_id, so.webhook_payload, so.fetched_payload, so.updated_at
+            SELECT so.venda_a_id, so.webhook_payload, so.fetched_payload, so.created_at, so.updated_at,
+                   latest_event.created_at AS webhook_received_at,
+                   approve_job.run_after AS approval_scheduled_at,
+                   create_job.run_after AS transfer_scheduled_at
             FROM source_orders so
             LEFT JOIN public.orders_map om ON om.venda_a_id::text = so.venda_a_id
+            LEFT JOIN LATERAL (
+                SELECT created_at
+                FROM public.events
+                WHERE source = 'A'
+                  AND topic = 'vendas'
+                  AND venda_id = so.venda_a_id
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) latest_event ON true
+            LEFT JOIN LATERAL (
+                SELECT run_after
+                FROM public.jobs
+                WHERE dedupe_key = 'A:vendas:' || so.venda_a_id || ':approve_order_a'
+                  AND status IN ('queued', 'running')
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) approve_job ON true
+            LEFT JOIN LATERAL (
+                SELECT run_after
+                FROM public.jobs
+                WHERE dedupe_key = 'A:vendas:' || so.venda_a_id || ':create_order_c'
+                  AND status IN ('queued', 'running')
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) create_job ON true
             WHERE om.venda_a_id IS NULL
               AND (so.order_date IS NULL OR so.order_date >= CURRENT_DATE - ($2::int || ' days')::interval)
             ORDER BY COALESCE(so.order_date, so.updated_at::date) DESC, so.updated_at DESC

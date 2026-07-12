@@ -120,20 +120,19 @@ function matchesFilters(item){
 async function load(){
   document.body.classList.add('loading');
   try{
-    const [res,eventsRes,tokensRes,healthRes]=await Promise.all([
-      fetch(`/admin/orders-panel/data?limit=3000&days=${encodeURIComponent(state.filters.days)}&divergence_limit=80`),
+    const [res,eventsRes,tokensRes]=await Promise.all([
+      fetch(`/admin/orders-panel/data?limit=500&days=${encodeURIComponent(state.filters.days)}&divergence_limit=80`),
       fetch('/admin/events?limit=200').catch(()=>null),
-      fetch('/admin/tokens').catch(()=>null),
-      fetch('/admin/tokens/health').catch(()=>null)
+      fetch('/admin/tokens').catch(()=>null)
     ]);
     if(res.status===401){location.href='/login?next=/orders-panel';return}
     if(!res.ok)throw new Error('Falha ao carregar pedidos: '+res.status);
     state.data=await res.json();
     state.events=eventsRes&&eventsRes.ok?(await eventsRes.json()).events||[]:[];
     state.auth.tokens=tokensRes&&tokensRes.ok?(await tokensRes.json()).tokens||[]:[];
-    state.auth.health=healthRes&&healthRes.ok?await healthRes.json():{};
     render();
     renderAuthMini();
+    refreshAuthHealth();
   }catch(err){
     $('summary').innerHTML='';
     $('subtabs').innerHTML='';
@@ -148,6 +147,13 @@ function render(){
   renderSummary();
   renderSubtabs();
   renderTable();
+}
+
+async function refreshAuthHealth(){
+  try{
+    const res=await fetch('/admin/tokens/health');
+    if(res.ok){state.auth.health=await res.json();renderAuthMini()}
+  }catch(e){}
 }
 
 function renderAuthMini(){

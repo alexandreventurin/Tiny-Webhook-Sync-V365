@@ -117,7 +117,7 @@ function matchesFilters(item){
 async function load(){
   document.body.classList.add('loading');
   try{
-    const res=await fetch(`/admin/orders-panel/data?limit=500&days=${encodeURIComponent(state.filters.days)}&divergence_limit=80`);
+    const res=await fetch(`/admin/orders-panel/data?limit=3000&days=${encodeURIComponent(state.filters.days)}&divergence_limit=80`);
     if(res.status===401){location.href='/login?next=/orders-panel';return}
     if(!res.ok)throw new Error('Falha ao carregar pedidos: '+res.status);
     state.data=await res.json();
@@ -156,13 +156,14 @@ function renderSummary(){
   const d=state.data||{origin:{valid:[],needs_adjustment:[],do_not_export:[]},synced:[],errors:[],cancelled:{pending:[],reviewed:[]},queue:{items:[]}};
   const scheduled=(d.origin.valid||[]).length+(d.origin.needs_adjustment||[]).length;
   const divergent=(d.synced||[]).filter(x=>x.divergence_count>0).length;
+  const syncedTotal=d.summary_counts?.synced_total??d.synced.length;
   const period=`Últimos ${esc(d.period_days||state.filters.days)} dias`;
   const cards=[
     ['Agendados para exportação',scheduled,'blue'],
     ['Prontos para exportação',d.origin.valid.length,'green'],
     ['Precisam de ajuste',d.origin.needs_adjustment.length,'orange','Atualizar','showNeedsAdjustment()'],
     ['Não exportar',d.origin.do_not_export.length,'gray'],
-    ['Sincronizados',d.synced.length,'green'],
+    ['Sincronizados',syncedTotal,'green'],
     ['Com erro',d.errors.length,'red','Retentar','retryPanelErrors()'],
     ['Divergentes',divergent,'purple'],
     ['Cancelados para analisar',d.cancelled.pending.length,'teal'],

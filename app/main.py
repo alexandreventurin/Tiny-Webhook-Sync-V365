@@ -1128,7 +1128,7 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
     from app.db import get_pool, upsert_orders_c_fetched, upsert_orders_c_fetch_error
     from app.tiny_client import TinyClient
     from app.tiny_oauth import ensure_access_token
-    limit = max(1, min(limit, 500))
+    limit = max(1, min(limit, 3000))
     days = max(1, min(days, 365))
     divergence_limit = max(0, min(divergence_limit, 120))
     p = await get_pool()
@@ -1200,6 +1200,21 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
             ORDER BY COALESCE(order_date, updated_at::date) DESC, updated_at DESC
             LIMIT $1
         """, limit, days)
+        synced_count_row = await conn.fetchrow("""
+            WITH mapped_orders AS (
+                SELECT om.updated_at,
+                       CASE
+                           WHEN oas.fetched_payload::jsonb->>'data' ~ '^\\d{4}-\\d{2}-\\d{2}'
+                           THEN substring(oas.fetched_payload::jsonb->>'data' from 1 for 10)::date
+                           ELSE NULL
+                       END AS order_date
+                FROM public.orders_map om
+                LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
+            )
+            SELECT COUNT(*) AS total
+            FROM mapped_orders
+            WHERE order_date IS NULL OR order_date >= CURRENT_DATE - ($1::int || ' days')::interval
+        """, days)
         cancelled_review_rows = await conn.fetch("""
             SELECT venda_a_id, status, created_at, reviewed_at, updated_at
             FROM public.cancelled_order_reviews
@@ -1416,6 +1431,9 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
             "reviewed": [item for item in synced if item.get("cancel_review_status") == "reviewed"],
         },
         "errors": errors,
+        "summary_counts": {
+            "synced_total": int(synced_count_row["total"] or 0) if synced_count_row else len(synced),
+        },
         "queue": {
             "items": queue_items,
             "groups": queue_groups,

@@ -1327,7 +1327,7 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
         errors.append(item)
 
     now = datetime.now(timezone.utc)
-    queue_limit_10min = max(1, int(os.getenv("TINY_WRITE_LIMIT_10MIN", "300")))
+    queue_limit_10min = max(1, int(os.getenv("TINY_WRITE_LIMIT_10MIN", "600")))
     queue_items = []
     queue_groups_by_key = {}
     for row in queue_rows:

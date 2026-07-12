@@ -9,7 +9,7 @@ import os
 import sys
 import time
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 
 from pathlib import Path
@@ -27,7 +27,8 @@ from app.db import (
     get_jobs_list, get_last_event_at, get_last_job_done_at,
     get_orders_a_list, get_order_a_snapshot, get_orders_map_list,
     check_is_echo, update_event_action_result,
-    get_order_mapping_by_a, get_order_mapping_by_c
+    get_order_mapping_by_a, get_order_mapping_by_c,
+    upsert_cancelled_order_review, mark_cancelled_order_reviews
 )
 from app.schemas import (
     WebhookResponse, HealthResponse, JobsListResponse, JobItem, RunJobsResponse,
@@ -110,6 +111,21 @@ def _login_url_for(request: Request) -> str:
 def _wants_html(request: Request) -> bool:
     accept = request.headers.get("accept", "")
     return "text/html" in accept or request.url.path in ("/dashboard", "/import", "/orders-panel")
+
+
+def approval_delay_minutes(now: datetime | None = None) -> int:
+    now = now or datetime.now(timezone.utc)
+    weekday = now.weekday()
+    if weekday <= 3:
+        days = 1
+    elif weekday == 4:
+        days = 3
+    elif weekday == 5:
+        days = 3
+    else:
+        days = 2
+    target = now + timedelta(days=days)
+    return max(1, int((target - now).total_seconds() // 60))
 
 
 @app.middleware("http")
@@ -280,6 +296,9 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
             return JSONResponse(content={"ok": True, "status": "ignored", "reason": "missing_venda_id_and_id_nota_fiscal"})
         
         job_type = determine_job_type(source, topic, codigo_situacao_str)
+
+        if source == "A" and topic == "vendas" and venda_id_int and normalize_status(codigo_situacao_str) == "cancelado":
+            await upsert_cancelled_order_review(str(venda_id_int))
         
         if job_type == "noop":
             if event_id:
@@ -322,7 +341,7 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
         }
         
         # sync_tracking_c_to_a: delay 1 min para dar tempo da transportadora popular o código de rastreio
-        initial_delay = 1 if job_type == "sync_tracking_c_to_a" else 0
+        initial_delay = approval_delay_minutes() if job_type == "approve_order_a" else (1 if job_type == "sync_tracking_c_to_a" else 0)
         await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload, delay_minutes=initial_delay)
         
         if event_id:
@@ -1097,6 +1116,12 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
             ORDER BY COALESCE(order_date, updated_at::date) DESC, updated_at DESC
             LIMIT $1
         """, limit, days)
+        cancelled_review_rows = await conn.fetch("""
+            SELECT venda_a_id, status, created_at, reviewed_at, updated_at
+            FROM public.cancelled_order_reviews
+            ORDER BY updated_at DESC
+            LIMIT $1
+        """, limit)
         error_rows = await conn.fetch("""
             SELECT id, job_type, dedupe_key, status, payload, attempts, last_error, action_preview, created_at, updated_at
             FROM public.jobs
@@ -1111,6 +1136,7 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
         """)
 
     mapped_product_ids = {int(row["id_a"]) for row in mapped_product_rows if row["id_a"] is not None}
+    cancelled_reviews = {str(row["venda_a_id"]): dict(row) for row in cancelled_review_rows}
     origin = [_order_summary_from_snapshot(dict(row), mapped_product_ids) for row in origin_rows]
     synced = []
     token_c_for_counts = await ensure_access_token("B") if divergence_limit else None
@@ -1150,6 +1176,11 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
         item["situacao_a"] = payload.get("situacao") if isinstance(payload, dict) else None
         item["situacao_a_label"] = _status_label(item.get("situacao_a"))
         item["last_job_status"] = item.get("last_sync_status")
+        review = cancelled_reviews.get(str(item.get("venda_a_id")))
+        if review:
+            item["cancel_review_status"] = review.get("status")
+            item["cancel_reviewed_at"] = review.get("reviewed_at")
+            item["cancel_review_created_at"] = review.get("created_at")
         item["action_preview"] = {}
         item["divergence_count"] = None
         if destination_payload:
@@ -1174,9 +1205,22 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
             "do_not_export": [item for item in origin if item["export_category"] == "do_not_export"],
         },
         "synced": synced,
+        "cancelled": {
+            "pending": [item for item in synced if item.get("cancel_review_status") == "pending"],
+            "reviewed": [item for item in synced if item.get("cancel_review_status") == "reviewed"],
+        },
         "errors": errors,
         "period_days": days,
     }
+
+
+@app.post("/admin/orders-panel/cancelled/mark-reviewed")
+async def admin_orders_panel_cancelled_mark_reviewed(request: Request):
+    payload = await request.json()
+    ids = payload.get("venda_a_ids") if isinstance(payload, dict) else []
+    ids = [str(item) for item in ids if item]
+    updated = await mark_cancelled_order_reviews(ids)
+    return {"ok": True, "updated": updated}
 
 
 @app.get("/admin/orders-panel/detail")

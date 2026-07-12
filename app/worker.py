@@ -43,6 +43,7 @@ from app.settings import (
 )
 from app.tiny_client import TinyClient, TinyApiError
 from app.tiny_oauth import ensure_access_token, force_refresh_token
+from app.utils import normalize_status
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -317,6 +318,60 @@ async def process_job(job: dict) -> None:
     topic = payload.get('topic')
     
     try:
+        if job_type == 'approve_order_a':
+            if not await get_feature_flag("auto_approve_open_orders"):
+                action_preview = {"would": "approve_order_a", "skipped": True, "reason": "auto_approve_open_orders flag disabled"}
+                await update_job_done(job_id, action_preview)
+                logger.info(f"Job {job_id} skipped: auto_approve_open_orders flag disabled")
+                return
+
+            if not venda_id:
+                await update_job_failed(job_id, "missing_venda_id", attempts)
+                return
+
+            token_a = await ensure_access_token("A")
+            if not token_a:
+                await update_job_failed(job_id, "No valid OAuth token for A", attempts)
+                return
+
+            client_a = TinyClient(token_a)
+            a_details = await call_tiny("A", client_a, "get_order_details", str(venda_id))
+            await upsert_orders_a_fetched(venda_a_id=str(venda_id), fetched_payload=a_details)
+            current_status = normalize_status((a_details or {}).get("situacao"))
+            if current_status != "em_aberto":
+                action_preview = {
+                    "would": "approve_order_a",
+                    "skipped": True,
+                    "reason": "status_not_open",
+                    "venda_a_id": str(venda_id),
+                    "current_status": current_status,
+                }
+                await update_job_done(job_id, action_preview)
+                return
+
+            await call_tiny("A", client_a, "update_order_status", str(venda_id), 3)
+            refreshed = await call_tiny("A", client_a, "get_order_details", str(venda_id))
+            await upsert_orders_a_fetched(venda_a_id=str(venda_id), fetched_payload=refreshed)
+
+            create_order_dedupe_key = f"A:vendas:{venda_id}:create_order_c"
+            create_order_payload = {
+                "source": "A",
+                "topic": "vendas",
+                "venda_id": str(venda_id),
+                "codigo_situacao": "aprovado",
+            }
+            create_job_created = await insert_job(job_type="create_order_c", dedupe_key=create_order_dedupe_key, event_id=None, payload=create_order_payload)
+            action_preview = {
+                "would": "approve_order_a",
+                "done": True,
+                "venda_a_id": str(venda_id),
+                "next_job": "create_order_c",
+                "create_job_created": create_job_created,
+            }
+            await update_job_done(job_id, action_preview)
+            logger.info(f"Job {job_id} approved A:{venda_id} and queued create_order_c={create_job_created}")
+            return
+
         if job_type == 'create_order_c':
             is_from_backfill = payload.get('from_backfill') or payload.get('force_status_c')
             flag_key = "replicate_imports" if is_from_backfill else "replicate_orders"
@@ -643,14 +698,16 @@ async def process_job(job: dict) -> None:
                 else:
                     logger.warning(f"Job {job_id}: tag A failed and add_tag_a job was NOT created (dedupe or error)")
 
-            force_status_c = payload.get('force_status_c')
+            status_a_normalized = normalize_status(order_data.get('situacao'))
+            force_status_c = payload.get('force_status_c') or ("aprovado" if status_a_normalized == "aprovado" else None)
             force_status_applied = False
             if force_status_c and venda_c_id:
-                FORCE_SITUACAO_CODE = {"entregue": 6}
+                FORCE_SITUACAO_CODE = {"aprovado": 3, "entregue": 6}
                 force_code = FORCE_SITUACAO_CODE.get(force_status_c)
                 if force_code:
                     try:
                         await call_tiny("B", client_c, "update_order_status", venda_c_id, force_code)
+                        await refresh_order_c_snapshot(client_c, venda_c_id)
                         force_status_applied = True
                         logger.info(f"Job {job_id}: forced status '{force_status_c}' ({force_code}) on C order {venda_c_id}")
                     except Exception as e:
@@ -786,10 +843,12 @@ async def process_job(job: dict) -> None:
                 return
 
             SITUACAO_CODE = {
+                "aprovado": 3,
                 "faturado": 1,
                 "cancelado": 2,
                 "enviado": 5,
                 "entregue": 6,
+                "nao_entregue": 9,
             }
             
             situacao_int = SITUACAO_CODE.get(codigo_situacao)

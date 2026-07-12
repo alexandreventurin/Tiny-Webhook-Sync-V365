@@ -143,6 +143,17 @@ async def init_db():
                     updated_at TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS public.cancelled_order_reviews (
+                    id SERIAL PRIMARY KEY,
+                    venda_a_id TEXT UNIQUE NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    reviewed_at TIMESTAMPTZ,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
             
             try:
                 await conn.execute("ALTER TABLE public.orders_map ADD COLUMN IF NOT EXISTS last_sync_status TEXT")
@@ -221,7 +232,7 @@ async def init_db():
                 await conn.execute("ALTER TABLE public.jobs DROP CONSTRAINT IF EXISTS jobs_job_type_check")
                 await conn.execute("""
                     ALTER TABLE public.jobs ADD CONSTRAINT jobs_job_type_check
-                    CHECK (job_type = ANY (ARRAY['noop','create_order_c','sync_status','fetch_label','fetch_nf_link','sync_nf_link','fetch_order_a','add_tag_c','add_tag_a','sync_tracking_c_to_a','update_numero_compra']))
+                    CHECK (job_type = ANY (ARRAY['noop','create_order_c','sync_status','fetch_label','fetch_nf_link','sync_nf_link','fetch_order_a','add_tag_c','add_tag_a','sync_tracking_c_to_a','update_numero_compra','approve_order_a']))
                 """)
             except Exception:
                 pass
@@ -236,6 +247,18 @@ async def init_db():
                     ('sync_status_faturado', false, true, 'Sync Status: Faturado', 'Espelha status faturado de C para A'),
                     ('sync_nf_link', false, true, 'Enviar NF', 'Envia dados da NF de C para observações de A'),
                     ('sync_tracking_pronto_envio', true, true, 'Sync Rastreio C→A (Pronto Envio)', 'Quando C entra em pronto_envio, copia código/URL de rastreio para A e avança status')
+                ON CONFLICT (key) DO UPDATE SET functional = EXCLUDED.functional, label = EXCLUDED.label, description = EXCLUDED.description
+            """)
+
+            await conn.execute("""
+                INSERT INTO public.feature_flags (key, enabled, functional, label, description)
+                VALUES ('auto_approve_open_orders', true, true, 'Aprovar pedidos em aberto', 'Aprova pedidos A em aberto no mesmo horario apos 1 dia util')
+                ON CONFLICT (key) DO UPDATE SET functional = EXCLUDED.functional, label = EXCLUDED.label, description = EXCLUDED.description
+            """)
+
+            await conn.execute("""
+                INSERT INTO public.feature_flags (key, enabled, functional, label, description)
+                VALUES ('sync_status_nao_entregue', true, true, 'Sync Status: Nao entregue', 'Espelha status nao entregue de C para A')
                 ON CONFLICT (key) DO UPDATE SET functional = EXCLUDED.functional, label = EXCLUDED.label, description = EXCLUDED.description
             """)
 
@@ -825,6 +848,35 @@ async def get_order_c_snapshot(venda_c_id: str) -> dict | None:
             WHERE venda_c_id = $1
         """, venda_c_id)
         return dict(row) if row else None
+
+
+async def upsert_cancelled_order_review(venda_a_id: str) -> None:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO public.cancelled_order_reviews (venda_a_id, status, updated_at)
+            VALUES ($1::text, 'pending', NOW())
+            ON CONFLICT (venda_a_id) DO UPDATE SET
+                status = CASE
+                    WHEN public.cancelled_order_reviews.status = 'reviewed' THEN public.cancelled_order_reviews.status
+                    ELSE 'pending'
+                END,
+                updated_at = NOW()
+        """, venda_a_id)
+
+
+async def mark_cancelled_order_reviews(ids: list[str]) -> int:
+    if not ids:
+        return 0
+    p = await get_pool()
+    async with p.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE public.cancelled_order_reviews
+            SET status = 'reviewed', reviewed_at = NOW(), updated_at = NOW()
+            WHERE venda_a_id = ANY($1::text[])
+              AND status <> 'reviewed'
+        """, ids)
+        return int(result.split()[-1]) if result else 0
 
 
 async def upsert_orders_map_with_c(external_key: str, venda_a_id: str, venda_c_id: str | None) -> None:

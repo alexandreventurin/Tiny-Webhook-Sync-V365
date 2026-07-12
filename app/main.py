@@ -1266,10 +1266,11 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
                 oma.venda_c_id::text,
                 omc.venda_c_id::text
             )
-            WHERE j.created_at >= NOW() - INTERVAL '2 days'
+            WHERE j.status IN ('queued', 'running')
+               OR j.created_at >= NOW() - INTERVAL '2 days'
                OR j.updated_at >= NOW() - INTERVAL '2 days'
-               OR j.status IN ('queued', 'running', 'failed', 'dead', 'waiting_sku', 'skipped_not_mapped')
-            ORDER BY COALESCE(j.run_after, j.updated_at, j.created_at) ASC
+               OR j.run_after >= NOW() - INTERVAL '2 days'
+            ORDER BY COALESCE(j.run_after, j.updated_at, j.created_at) DESC
             LIMIT $1
         """, min(1000, max(300, limit * 2)))
         mapped_product_rows = await conn.fetch("""

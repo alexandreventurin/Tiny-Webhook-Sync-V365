@@ -223,8 +223,8 @@ async def root():
 WORKER_HEARTBEAT_MAX_AGE_SECONDS = 30 * 60  # 30 minutos
 
 
-@app.get("/health")
-async def health():
+@app.get("/admin/worker-health")
+async def admin_worker_health():
     """
     Healthcheck usado pelo Fly.io para detectar worker travado.
     - 200 OK: worker pulsou nas últimas 4h → tudo bem

@@ -1128,7 +1128,7 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
     from app.db import get_pool, upsert_orders_c_fetched, upsert_orders_c_fetch_error
     from app.tiny_client import TinyClient
     from app.tiny_oauth import ensure_access_token
-    limit = max(1, min(limit, 3000))
+    limit = max(1, min(limit, 1000))
     days = max(1, min(days, 365))
     divergence_limit = max(0, min(divergence_limit, 120))
     p = await get_pool()

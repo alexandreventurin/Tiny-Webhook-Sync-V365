@@ -120,19 +120,13 @@ function matchesFilters(item){
 async function load(){
   document.body.classList.add('loading');
   try{
-    const [res,eventsRes,tokensRes]=await Promise.all([
-      fetch(`/admin/orders-panel/data?limit=500&days=${encodeURIComponent(state.filters.days)}&divergence_limit=80`),
-      fetch('/admin/events?limit=200').catch(()=>null),
-      fetch('/admin/tokens').catch(()=>null)
-    ]);
+    const res=await fetch(`/admin/orders-panel/data?limit=240&days=${encodeURIComponent(state.filters.days)}&divergence_limit=80`);
     if(res.status===401){location.href='/login?next=/orders-panel';return}
     if(!res.ok)throw new Error('Falha ao carregar pedidos: '+res.status);
     state.data=await res.json();
-    state.events=eventsRes&&eventsRes.ok?(await eventsRes.json()).events||[]:[];
-    state.auth.tokens=tokensRes&&tokensRes.ok?(await tokensRes.json()).tokens||[]:[];
     render();
     renderAuthMini();
-    refreshAuthHealth();
+    loadPanelExtras();
   }catch(err){
     $('summary').innerHTML='';
     $('subtabs').innerHTML='';
@@ -140,6 +134,21 @@ async function load(){
   }finally{
     document.body.classList.remove('loading');
   }
+}
+
+async function loadPanelExtras(){
+  try{
+    const [eventsRes,tokensRes]=await Promise.all([
+      fetch('/admin/events?limit=100').catch(()=>null),
+      fetch('/admin/tokens').catch(()=>null)
+    ]);
+    state.events=eventsRes&&eventsRes.ok?(await eventsRes.json()).events||[]:[];
+    state.auth.tokens=tokensRes&&tokensRes.ok?(await tokensRes.json()).tokens||[]:[];
+    renderAuthMini();
+    renderSubtabs();
+    if(state.tab==='queue'&&state.subtab==='webhooks')renderTable();
+    refreshAuthHealth();
+  }catch(e){}
 }
 
 function render(){
@@ -271,7 +280,7 @@ function visibleList(list,extra=''){
 }
 function loadMoreHtml(page){
   const key=JSON.stringify(page.key).replace(/"/g,'&quot;');
-  return page.hasMore?`<div class="load-more"><button onclick="loadMorePage(${key})">Exibir mais 20 (${page.size}/${page.total})</button></div>`:'';
+  return page.hasMore?`<div class="load-more"><button onclick="loadMorePage(${key})">Exibir mais 20 (${Math.min(page.size,page.total)}/${page.total})</button></div>`:'';
 }
 function loadMorePage(key){state.pageSizes[key]=(state.pageSizes[key]||PAGE_STEP)+PAGE_STEP;renderTable()}
 

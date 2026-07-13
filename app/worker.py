@@ -4,7 +4,6 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Any
 
 from app.db import (
     fetch_and_lock_jobs,
@@ -36,10 +35,8 @@ from app.db import (
     upsert_partial_product,
 )
 from app.settings import (
-    TINY_A_TOKEN, TINY_C_TOKEN, 
     ENABLE_FETCH_A, EXECUTE_TINY_C, 
     ALLOW_VENDA_IDS, FETCH_CACHE_MINUTES,
-    MAX_ORDERS_TO_REPLICATE
 )
 from app.tiny_client import TinyClient, TinyApiError
 from app.tiny_oauth import ensure_access_token, force_refresh_token
@@ -373,8 +370,7 @@ async def process_job(job: dict) -> None:
             return
 
         if job_type == 'create_order_c':
-            is_from_backfill = payload.get('from_backfill') or payload.get('force_status_c')
-            flag_key = "replicate_imports" if is_from_backfill else "replicate_orders"
+            flag_key = "replicate_orders"
             if not await get_feature_flag(flag_key):
                 action_preview = {"would": "create_order_in_C", "skipped": True, "reason": f"{flag_key} flag disabled"}
                 await update_job_done(job_id, action_preview)
@@ -790,8 +786,6 @@ async def process_job(job: dict) -> None:
                     }
                     if payload.get('force_status_c'):
                         create_order_payload["force_status_c"] = payload["force_status_c"]
-                    if payload.get('from_backfill'):
-                        create_order_payload["from_backfill"] = True
                     await insert_job(job_type="create_order_c", dedupe_key=create_order_dedupe_key, event_id=None, payload=create_order_payload)
                     return
             
@@ -830,8 +824,6 @@ async def process_job(job: dict) -> None:
             }
             if payload.get('force_status_c'):
                 create_order_payload["force_status_c"] = payload["force_status_c"]
-            if payload.get('from_backfill'):
-                create_order_payload["from_backfill"] = True
             await insert_job(job_type="create_order_c", dedupe_key=create_order_dedupe_key, event_id=None, payload=create_order_payload)
             logger.info(f"Chained create_order_c job for venda {venda_id}")
         

@@ -245,7 +245,6 @@ async def init_db():
             await conn.execute("""
                 INSERT INTO public.feature_flags (key, enabled, functional, label, description) VALUES
                     ('replicate_orders', false, true, 'Replicar Pedidos (Webhook)', 'Cria pedidos em C quando A é aprovado via webhook'),
-                    ('replicate_imports', false, true, 'Replicar Pedidos (Importação)', 'Cria pedidos em C vindos da importação em massa'),
                     ('sync_status_enviado', false, true, 'Sync Status: Enviado', 'Espelha status enviado de A para C'),
                     ('sync_status_entregue', false, true, 'Sync Status: Entregue', 'Espelha status entregue de A para C'),
                     ('sync_status_cancelado', false, true, 'Sync Status: Cancelado', 'Espelha status cancelado entre A e C'),
@@ -266,45 +265,6 @@ async def init_db():
                 VALUES ('sync_status_nao_entregue', true, true, 'Sync Status: Nao entregue', 'Espelha status nao entregue de C para A')
                 ON CONFLICT (key) DO UPDATE SET functional = EXCLUDED.functional, label = EXCLUDED.label, description = EXCLUDED.description
             """)
-
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS public.import_runs (
-                    id SERIAL PRIMARY KEY,
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    data_inicio TEXT NOT NULL,
-                    data_fim TEXT NOT NULL,
-                    direction TEXT NOT NULL DEFAULT 'desc',
-                    limit_pages INTEGER,
-                    pages_fetched INTEGER DEFAULT 0,
-                    orders_found INTEGER DEFAULT 0,
-                    jobs_created INTEGER DEFAULT 0,
-                    orders_skipped INTEGER DEFAULT 0,
-                    orders_ignored INTEGER DEFAULT 0,
-                    started_at TIMESTAMPTZ,
-                    finished_at TIMESTAMPTZ,
-                    error TEXT,
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS public.import_run_items (
-                    id SERIAL PRIMARY KEY,
-                    run_id INTEGER REFERENCES public.import_runs(id),
-                    venda_a_id TEXT NOT NULL,
-                    numero_pedido TEXT,
-                    data_pedido TEXT,
-                    status_em_a TEXT,
-                    action TEXT NOT NULL,
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-
-            try:
-                await conn.execute("ALTER TABLE public.import_run_items ADD COLUMN IF NOT EXISTS motivo TEXT")
-            except Exception:
-                pass
-
             # Heartbeat do worker — usado pelo /health para detectar worker travado
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS public.worker_heartbeat (
@@ -320,12 +280,6 @@ async def init_db():
                 await conn.execute("ALTER TABLE public.worker_heartbeat ENABLE ROW LEVEL SECURITY")
             except Exception:
                 pass
-
-            try:
-                await conn.execute("ALTER TABLE public.import_runs ADD COLUMN IF NOT EXISTS api_total INTEGER")
-            except Exception:
-                pass
-            
         logger.info("Database connected and tables created")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}", exc_info=True)
@@ -1226,230 +1180,6 @@ async def get_dashboard_data() -> dict:
         }
 
 
-async def create_import_run(data_inicio: str, data_fim: str, direction: str, limit_pages: int | None) -> int:
-    p = await get_pool()
-    async with p.acquire() as conn:
-        row = await conn.fetchrow("""
-            INSERT INTO public.import_runs (status, data_inicio, data_fim, direction, limit_pages, started_at)
-            VALUES ('running', $1, $2, $3, $4, NOW())
-            RETURNING id
-        """, data_inicio, data_fim, direction, limit_pages)
-        return row["id"]
-
-
-async def update_import_run_progress(run_id: int, pages_fetched: int, orders_found: int,
-                                      jobs_created: int, orders_skipped: int, orders_ignored: int):
-    p = await get_pool()
-    async with p.acquire() as conn:
-        await conn.execute("""
-            UPDATE public.import_runs
-            SET pages_fetched = $2, orders_found = $3, jobs_created = $4,
-                orders_skipped = $5, orders_ignored = $6
-            WHERE id = $1
-        """, run_id, pages_fetched, orders_found, jobs_created, orders_skipped, orders_ignored)
-
-
-async def update_import_run_api_total(run_id: int, api_total: int):
-    p = await get_pool()
-    async with p.acquire() as conn:
-        await conn.execute("""
-            UPDATE public.import_runs SET api_total = $2 WHERE id = $1
-        """, run_id, api_total)
-
-
-async def finish_import_run(run_id: int, status: str, error: str | None = None):
-    p = await get_pool()
-    async with p.acquire() as conn:
-        await conn.execute("""
-            UPDATE public.import_runs
-            SET status = $2, finished_at = NOW(), error = $3
-            WHERE id = $1
-        """, run_id, status, error)
-
-
-async def insert_import_run_item(run_id: int, venda_a_id: str, numero_pedido: str | None,
-                                  data_pedido: str | None, status_em_a: str | None, action: str,
-                                  motivo: str | None = None):
-    p = await get_pool()
-    async with p.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO public.import_run_items (run_id, venda_a_id, numero_pedido, data_pedido, status_em_a, action, motivo)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-        """, run_id, venda_a_id, numero_pedido, data_pedido, status_em_a, action, motivo)
-
-
-async def get_import_run(run_id: int) -> dict | None:
-    p = await get_pool()
-    async with p.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM public.import_runs WHERE id = $1", run_id)
-        return dict(row) if row else None
-
-
-async def count_import_run_created_in_c(run_id: int) -> int:
-    p = await get_pool()
-    async with p.acquire() as conn:
-        count = await conn.fetchval("""
-            SELECT COUNT(*) FROM public.import_run_items iri
-            JOIN public.orders_map om ON om.venda_a_id = CAST(iri.venda_a_id AS INTEGER)
-            WHERE iri.run_id = $1
-              AND iri.action = 'job_created'
-              AND om.venda_c_id IS NOT NULL
-        """, run_id)
-        return count or 0
-
-
-async def count_requeueable_import_jobs(run_id: int) -> int:
-    p = await get_pool()
-    async with p.acquire() as conn:
-        count = await conn.fetchval("""
-            SELECT COUNT(*) FROM public.import_run_items iri
-            JOIN public.jobs j ON j.dedupe_key = 'A:vendas:' || iri.venda_a_id || ':create_order_c'
-              AND j.job_type = 'create_order_c'
-            WHERE iri.run_id = $1
-              AND iri.action = 'job_created'
-              AND j.status = 'done'
-              AND (j.action_preview::text LIKE '%flag disabled%' OR j.action_preview IS NULL)
-        """, run_id)
-        return count or 0
-
-
-async def requeue_import_run_jobs(run_id: int) -> int:
-    p = await get_pool()
-    async with p.acquire() as conn:
-        result = await conn.execute("""
-            UPDATE public.jobs j
-            SET status = 'queued', action_preview = NULL, attempts = 0
-            FROM public.import_run_items iri
-            WHERE iri.run_id = $1
-              AND iri.action = 'job_created'
-              AND j.dedupe_key = 'A:vendas:' || iri.venda_a_id || ':create_order_c'
-              AND j.job_type = 'create_order_c'
-              AND j.status = 'done'
-              AND (j.action_preview::text LIKE '%flag disabled%' OR j.action_preview IS NULL)
-        """, run_id)
-        count = int(result.split()[-1]) if result else 0
-        return count
-
-
-async def get_import_run_items(run_id: int, limit: int = 200, offset: int = 0) -> list:
-    p = await get_pool()
-    async with p.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT iri.venda_a_id, iri.numero_pedido, iri.data_pedido, iri.status_em_a,
-                   iri.action, iri.motivo, iri.created_at,
-                   j.status AS job_status,
-                   j.action_preview,
-                   tag_a_j.status AS tag_a_job_status,
-                   tag_c_j.status AS tag_c_job_status
-            FROM public.import_run_items iri
-            LEFT JOIN public.jobs j
-              ON j.dedupe_key = 'A:vendas:' || iri.venda_a_id || ':create_order_c'
-              AND j.job_type = 'create_order_c'
-            LEFT JOIN public.orders_map om
-              ON om.venda_a_id = CAST(iri.venda_a_id AS INTEGER)
-            LEFT JOIN public.jobs tag_a_j
-              ON tag_a_j.dedupe_key = 'A:tag:' || iri.venda_a_id || ':add_tag_a'
-              AND tag_a_j.job_type = 'add_tag_a'
-            LEFT JOIN public.jobs tag_c_j
-              ON tag_c_j.dedupe_key = 'C:tag:' || CAST(om.venda_c_id AS TEXT) || ':add_tag_c'
-              AND tag_c_j.job_type = 'add_tag_c'
-            WHERE iri.run_id = $1
-            ORDER BY iri.id DESC
-            LIMIT $2 OFFSET $3
-        """, run_id, limit, offset)
-
-        import json as _json
-        result = []
-        for r in rows:
-            item = dict(r)
-            # Parse action_preview to extract tag and status info
-            ap = item.pop('action_preview', None)
-            ap_data = {}
-            if ap:
-                try:
-                    ap_data = _json.loads(ap) if isinstance(ap, str) else ap
-                except Exception:
-                    pass
-
-            # Determine display status
-            action = item.get('action')
-            job_status = item.get('job_status')
-            if action == 'job_created':
-                if job_status == 'done' and ap_data.get('created'):
-                    item['display_status'] = 'clonado_em_c'
-                elif job_status == 'running':
-                    item['display_status'] = 'processando'
-                elif job_status in ('failed', 'dead'):
-                    item['display_status'] = 'erro'
-                else:
-                    item['display_status'] = 'job_criado'
-            elif action == 'already_imported':
-                item['display_status'] = 'ja_existia'
-            else:
-                item['display_status'] = 'ignorado'
-
-            # Determine status in C
-            situacao_target = ap_data.get('situacao_target')
-            item['status_c'] = situacao_target if situacao_target else None
-
-            # Determine tags
-            tag_c_ok = ap_data.get('tag_added', False) or (item.get('tag_c_job_status') == 'done')
-            tag_a_ok = ap_data.get('tag_a_added', False) or (item.get('tag_a_job_status') == 'done')
-            if tag_a_ok and tag_c_ok:
-                item['tags'] = 'A+C'
-            elif tag_a_ok:
-                item['tags'] = 'A'
-            elif tag_c_ok:
-                item['tags'] = 'C'
-            else:
-                item['tags'] = None
-
-            # Clean up internal fields
-            item.pop('tag_a_job_status', None)
-            item.pop('tag_c_job_status', None)
-            item.pop('job_status', None)
-
-            result.append(item)
-        return result
-
-
-async def get_import_runs_list(limit: int = 5, offset: int = 0) -> tuple[list, int]:
-    p = await get_pool()
-    async with p.acquire() as conn:
-        total = await conn.fetchval("SELECT COUNT(*) FROM public.import_runs")
-        rows = await conn.fetch("""
-            SELECT id, status, data_inicio, data_fim, direction, limit_pages,
-                   pages_fetched, orders_found, jobs_created, orders_skipped, orders_ignored,
-                   api_total, started_at, finished_at, error, created_at
-            FROM public.import_runs
-            ORDER BY id DESC
-            LIMIT $1 OFFSET $2
-        """, limit, offset)
-        return [dict(r) for r in rows], total
-
-
-async def check_order_exists_in_map(venda_a_id: str) -> bool:
-    p = await get_pool()
-    async with p.acquire() as conn:
-        try:
-            venda_a_id_int = int(venda_a_id)
-        except (ValueError, TypeError):
-            return False
-        row = await conn.fetchval(
-            "SELECT 1 FROM public.orders_map WHERE venda_a_id = $1", venda_a_id_int
-        )
-        return row is not None
-
-
-async def has_running_import() -> bool:
-    p = await get_pool()
-    async with p.acquire() as conn:
-        row = await conn.fetchval(
-            "SELECT 1 FROM public.import_runs WHERE status = 'running'"
-        )
-        return row is not None
-
-
 async def create_tracking_fix_jobs() -> dict:
     """
     Cria novos jobs para reprocessar sync_tracking_c_to_a que escreveram código vazio.
@@ -1773,15 +1503,3 @@ async def get_worker_heartbeat_age_seconds() -> float | None:
         except Exception as e:
             logger.error(f"Failed to read worker heartbeat: {e}")
             return None
-
-
-async def recover_stale_import_runs() -> int:
-    p = await get_pool()
-    async with p.acquire() as conn:
-        result = await conn.execute("""
-            UPDATE public.import_runs
-            SET status = 'error', finished_at = NOW(), error = 'Process restarted during import'
-            WHERE status = 'running'
-        """)
-        count = int(result.split()[-1]) if result else 0
-        return count

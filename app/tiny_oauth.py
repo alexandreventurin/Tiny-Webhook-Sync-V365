@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from app.settings import (
-    TINY_AUTH_BASE, TINY_API_BASE,
+    TINY_AUTH_BASE,
     TINY_A_CLIENT_ID, TINY_A_CLIENT_SECRET,
     TINY_C_CLIENT_ID, TINY_C_CLIENT_SECRET,
     APP_BASE_URL

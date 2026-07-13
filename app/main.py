@@ -41,14 +41,6 @@ from app.worker import worker_loop, stop_worker, run_worker_once, run_worker_onc
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    if os.getenv("RUN_IMPORT_RECOVERY_ON_STARTUP", "0").lower() in ("1", "true", "yes"):
-        from app.db import recover_stale_import_runs
-        try:
-            recovered = await recover_stale_import_runs()
-            if recovered:
-                logging.getLogger(__name__).info(f"Recovered {recovered} stale import run(s) from previous restart")
-        except Exception as exc:
-            logging.getLogger(__name__).warning("Could not recover stale import runs during startup: %s", exc)
     worker_enabled = os.getenv("WORKER_ENABLED", "1").lower() in ("1", "true", "yes")
     worker_task = asyncio.create_task(worker_loop()) if worker_enabled else None
     if not worker_enabled:
@@ -73,7 +65,7 @@ ADMIN_SESSION_MAX_AGE = int(os.getenv("ADMIN_SESSION_MAX_AGE", str(8 * 60 * 60))
 ADMIN_SESSION_SECRET = os.getenv("ADMIN_SESSION_SECRET") or hashlib.sha256(
     f"{ADMIN_USERNAME}:{ADMIN_PASSWORD}:{APP_BUILD}".encode("utf-8")
 ).hexdigest()
-PROTECTED_PATHS = ("/admin", "/dashboard", "/import", "/orders-panel")
+PROTECTED_PATHS = ("/admin", "/dashboard", "/orders-panel")
 
 
 def _sign_session(message: str) -> str:
@@ -118,7 +110,7 @@ def _login_url_for(request: Request) -> str:
 
 def _wants_html(request: Request) -> bool:
     accept = request.headers.get("accept", "")
-    return "text/html" in accept or request.url.path in ("/dashboard", "/import", "/orders-panel")
+    return "text/html" in accept or request.url.path in ("/dashboard", "/orders-panel")
 
 
 def approval_delay_minutes(now: datetime | None = None) -> int:
@@ -474,30 +466,6 @@ async def admin_health_details():
     )
 
 
-@app.post("/admin/db/ensure-indexes")
-async def admin_db_ensure_indexes():
-    from app.db import get_pool
-    statements = [
-        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_orders_a_snapshot_updated_at ON public.orders_a_snapshot(updated_at DESC)",
-        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_orders_map_updated_at ON public.orders_map(updated_at DESC)",
-        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_orders_map_venda_a_text ON public.orders_map((venda_a_id::text))",
-        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_orders_map_venda_c_text ON public.orders_map((venda_c_id::text))",
-        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_jobs_updated_at ON public.jobs(updated_at DESC)",
-        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_jobs_run_after ON public.jobs(run_after DESC)",
-    ]
-    p = await get_pool()
-    executed = []
-    async with p.acquire() as conn:
-        await conn.execute("SET statement_timeout = '5min'")
-        for sql in statements:
-            try:
-                await conn.execute(sql, timeout=300)
-                executed.append(sql)
-            except Exception as exc:
-                return {"ok": False, "executed": executed, "failed_sql": sql, "error": str(exc)}
-    return {"ok": True, "executed": executed}
-
-
 @app.get("/admin/jobs", response_model=JobsListResponse)
 async def admin_jobs(status: str | None = None, job_type: str | None = None, limit: int = 50):
     jobs = await get_jobs_list(status=status, limit=limit, job_type=job_type)
@@ -632,54 +600,6 @@ async def admin_replication_status():
         "limit_reached": current_count >= limit if limit > 0 else False,
         "execute_tiny_c": EXECUTE_TINY_C
     }
-
-
-@app.post("/admin/jobs/backfill")
-async def admin_backfill_jobs(limit: int = 100):
-    from app.db import get_pool
-    
-    p = await get_pool()
-    async with p.acquire() as conn:
-        orphan_events = await conn.fetch("""
-            SELECT DISTINCT ON (e.venda_id) e.venda_id, e.codigo_situacao, e.id_nota_fiscal
-            FROM public.events e
-            WHERE e.source = 'A' 
-              AND e.topic = 'vendas'
-              AND e.codigo_situacao IN ('aprovado')
-              AND NOT EXISTS (
-                SELECT 1 FROM public.jobs j 
-                WHERE j.dedupe_key = 'A:vendas:' || e.venda_id || ':fetch_order_a'
-              )
-            ORDER BY e.venda_id, e.created_at DESC
-            LIMIT $1
-        """, limit)
-        
-        created = 0
-        for row in orphan_events:
-            venda_id = row['venda_id']
-            codigo_situacao = row['codigo_situacao']
-            id_nota_fiscal = row['id_nota_fiscal']
-            
-            job_type = "fetch_order_a"
-            dedupe_key = f"A:vendas:{venda_id}:fetch_order_a"
-            
-            job_payload = {
-                "source": "A",
-                "topic": "vendas",
-                "venda_id": str(venda_id),
-                "codigo_situacao": codigo_situacao,
-                "id_nota_fiscal": str(id_nota_fiscal) if id_nota_fiscal else None,
-                "from_backfill": True
-            }
-            
-            await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload)
-            created += 1
-        
-        return {
-            "ok": True,
-            "orphan_events_found": len(orphan_events),
-            "jobs_created": created
-        }
 
 
 @app.get("/admin/orders-a", response_model=OrderAListResponse)
@@ -1912,82 +1832,6 @@ async def auth_a_callback(code: str | None = None, error: str | None = None, err
         return {"ok": True, "account": "A", "expires_in": expires_in}
     except Exception as e:
         return {"error": str(e)}
-
-
-@app.get("/import")
-async def import_page():
-    return FileResponse("app/static/import.html")
-
-
-@app.post("/admin/import/start")
-async def admin_import_start(
-    data_inicio: str = "2025-12-15",
-    data_fim: str | None = None,
-    dias: int | None = None,
-    direction: str = "desc",
-    limit_orders: int | None = None
-):
-    from app.db import has_running_import
-    from app.backfill import start_import, compute_data_fim
-
-    if await has_running_import():
-        return JSONResponse(status_code=409, content={"error": "already_running", "message": "Já existe uma importação em andamento"})
-
-    if dias and not data_fim:
-        data_fim = compute_data_fim(data_inicio, dias)
-    elif not data_fim:
-        data_fim = "2026-03-19"
-
-    run_id = await start_import(data_inicio, data_fim, direction, limit_orders)
-    return {"ok": True, "run_id": run_id, "data_inicio": data_inicio, "data_fim": data_fim}
-
-
-@app.get("/admin/import/{run_id}")
-async def admin_import_detail(run_id: int, items_limit: int = 200, items_offset: int = 0):
-    from app.db import get_import_run, get_import_run_items, count_import_run_created_in_c, count_requeueable_import_jobs
-
-    run = await get_import_run(run_id)
-    if not run:
-        return JSONResponse(status_code=404, content={"error": "not_found"})
-
-    items = await get_import_run_items(run_id, limit=items_limit, offset=items_offset)
-    run["created_in_c"] = await count_import_run_created_in_c(run_id)
-    run["requeueable"] = await count_requeueable_import_jobs(run_id)
-    for key in ['started_at', 'finished_at', 'created_at']:
-        if run.get(key):
-            run[key] = str(run[key])
-    for item in items:
-        if item.get('created_at'):
-            item['created_at'] = str(item['created_at'])
-
-    return {"run": run, "items": items}
-
-
-@app.get("/admin/import")
-async def admin_import_list(limit: int = 5, offset: int = 0):
-    from app.db import get_import_runs_list, count_import_run_created_in_c
-
-    runs, total = await get_import_runs_list(limit=limit, offset=offset)
-    for run in runs:
-        run["created_in_c"] = await count_import_run_created_in_c(run["id"])
-        for key in ['started_at', 'finished_at', 'created_at']:
-            if run.get(key):
-                run[key] = str(run[key])
-    return {"runs": runs, "total": total}
-
-
-@app.post("/admin/import/{run_id}/requeue")
-async def admin_import_requeue(run_id: int):
-    from app.db import requeue_import_run_jobs
-    count = await requeue_import_run_jobs(run_id)
-    return {"ok": True, "requeued": count}
-
-
-@app.post("/admin/import/{run_id}/cancel")
-async def admin_import_cancel(run_id: int):
-    from app.backfill import cancel_import
-    cancelled = cancel_import(run_id)
-    return {"ok": cancelled, "run_id": run_id}
 
 
 @app.get("/auth/c/callback")

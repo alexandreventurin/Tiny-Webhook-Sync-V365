@@ -442,8 +442,13 @@ async def webhook_c_notas_fiscais(request: Request):
     return JSONResponse(content={"ok": True})
 
 
-@app.get("/health", response_model=HealthResponse)
+@app.get("/health")
 async def health():
+    return {"ok": True}
+
+
+@app.get("/admin/health/details", response_model=HealthResponse)
+async def admin_health_details():
     events_total = await get_events_count()
     jobs_queued = await get_jobs_count_by_status('queued')
     jobs_failed = await get_jobs_count_by_status('failed')

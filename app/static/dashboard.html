@@ -10,7 +10,7 @@
 .brand{display:flex;align-items:baseline;gap:12px}.brand h1{margin:0;font-size:18px;font-weight:800}.brand span{font-size:12px;color:#9fb0c5}
 .nav{display:flex;align-items:center;gap:10px}.nav a,.nav button{border:0;background:#26364a;color:#dbe7f5;border-radius:6px;padding:8px 11px;text-decoration:none;font-size:13px;cursor:pointer}.nav a:hover,.nav button:hover{background:#334a65;color:#fff}
 .auth-mini{display:flex;align-items:center;gap:8px;flex:1;justify-content:center;min-width:0}.auth-mini-card{display:flex;align-items:center;gap:7px;min-width:155px;max-width:230px;height:34px;border:1px solid rgba(255,255,255,.16);background:#26364a;border-radius:7px;padding:0 8px;color:#dbe7f5}.auth-mini-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}.auth-mini-card.ok .auth-mini-dot{background:#22c55e}.auth-mini-card.expired .auth-mini-dot{background:#ef4444}.auth-mini-card.missing .auth-mini-dot{background:#94a3b8}.auth-mini-text{min-width:0;flex:1}.auth-mini-name{font-size:11px;font-weight:800;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.auth-mini-detail{font-size:10px;color:#aebdd0;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.auth-mini-link{border:0;background:#334a65;color:#fff;border-radius:5px;padding:5px 7px;text-decoration:none;font-size:10px;font-weight:800;white-space:nowrap}.auth-mini-link:hover{background:#3f5877}
-.wrap{max-width:1180px;margin:0 auto;padding:18px}.period{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.period-title{display:flex;align-items:center;gap:8px;color:#536274;font-size:13px;font-weight:800}.period-pill{height:34px;border:1px solid #9cc5ff;background:#eaf2ff;color:#17437a;border-radius:6px;padding:0 11px;font-size:13px;font-weight:800;cursor:pointer}.period-controls{display:none;grid-template-columns:repeat(5,minmax(110px,auto));gap:8px;align-items:end;background:#fff;border:1px solid #d9e1ea;border-radius:8px;padding:10px;margin-bottom:14px}.period-controls.open{display:grid}.period-controls button,.period-controls input{height:36px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#26364a;padding:0 10px;font-size:13px;font-weight:700}.period-controls button{cursor:pointer}.period-controls button.active{background:#1f3a5f;color:#fff;border-color:#1f3a5f}.period-controls label{display:grid;gap:4px;font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase}
+.wrap{max-width:1180px;margin:0 auto;padding:18px}.period{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.period-title{display:flex;align-items:center;gap:8px;color:#536274;font-size:13px;font-weight:800}.period-pill{height:34px;border:1px solid #9cc5ff;background:#eaf2ff;color:#17437a;border-radius:6px;padding:0 11px;font-size:13px;font-weight:800;cursor:pointer}.period-controls{display:none;grid-template-columns:repeat(7,minmax(98px,auto));gap:8px;align-items:end;background:#fff;border:1px solid #d9e1ea;border-radius:8px;padding:10px;margin-bottom:14px}.period-controls.open{display:grid}.period-controls button,.period-controls input{height:36px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#26364a;padding:0 10px;font-size:13px;font-weight:700}.period-controls button{cursor:pointer}.period-controls button.active{background:#1f3a5f;color:#fff;border-color:#1f3a5f}.period-controls .apply{background:#2563eb;color:#fff;border-color:#2563eb}.period-controls label{display:grid;gap:4px;font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase}.period-note{grid-column:1/-1;display:none;color:#be123c;font-size:12px;font-weight:700}.period-note.open{display:block}
 .summary-grid{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:12px}.metric{border:1px solid #d9e1ea;border-radius:8px;padding:14px;min-height:104px;display:flex;flex-direction:column;justify-content:space-between}.metric .value{font-size:29px;font-weight:850;color:#172033}.metric .label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#334155;margin-top:4px;line-height:1.25}.metric.blue{background:#cfe3ff;border-color:#7fb2ff}.metric.green{background:#c8f0d6;border-color:#75d994}.metric.orange{background:#ffe0b3;border-color:#ffb75d}.metric.gray{background:#dde5ef;border-color:#acb8c8}.metric.red{background:#ffd1d1;border-color:#ff8a8a}.metric.purple{background:#ded2ff;border-color:#ad93ff}.metric.teal{background:#c5f0e9;border-color:#67d4c7}.metric button{align-self:flex-start;margin-top:10px;height:28px;border:1px solid rgba(15,23,42,.12);background:#fff;border-radius:6px;padding:0 10px;font-size:12px;font-weight:800;color:#26364a;cursor:pointer}.metric button:hover{background:#f8fafc}
 .hint{margin-top:14px;color:#64748b;font-size:12px}.empty{background:#fff;border:1px solid #d9e1ea;border-radius:8px;padding:28px;text-align:center;color:#7a899a}.loading{opacity:.55;pointer-events:none}
 @media(max-width:820px){.topbar{align-items:flex-start;flex-direction:column}.auth-mini{width:100%;justify-content:flex-start;flex-wrap:wrap}.period{align-items:flex-start;flex-direction:column}.period-controls{grid-template-columns:1fr 1fr}.summary-grid{grid-template-columns:repeat(2,1fr)}.wrap{padding:12px}}
@@ -31,6 +31,8 @@
     <div class="period-title"><span>Período analisado</span><button class="period-pill" id="periodToggle">Últimos 30 dias</button></div>
   </section>
   <section class="period-controls" id="periodControls">
+    <button data-period="today">Hoje</button>
+    <button data-period="yesterday">Ontem</button>
     <button data-period="last_7">Últimos 7 dias</button>
     <button data-period="last_30" class="active">Últimos 30 dias</button>
     <button data-period="this_month">Este mês</button>
@@ -38,6 +40,8 @@
     <button data-period="custom">Personalizado</button>
     <label>Início<input id="customStart" type="date"></label>
     <label>Fim<input id="customEnd" type="date"></label>
+    <button class="apply" id="applyCustomPeriod">Aplicar período</button>
+    <div class="period-note" id="periodNote">Informe início e fim para aplicar o período personalizado.</div>
   </section>
   <section class="summary-grid" id="summary"></section>
   <div class="hint">A dashboard inicial carrega apenas somatórios. As listagens ficam no Painel completo.</div>
@@ -120,11 +124,20 @@ document.querySelectorAll('[data-period]').forEach(btn=>{
     document.querySelectorAll('[data-period]').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
     state.period=btn.dataset.period;
+    $('periodNote').classList.remove('open');
     if(state.period!=='custom')loadSummary();
   };
 });
-$('customStart').onchange=e=>{state.start=e.target.value;if(state.period==='custom'&&state.start&&state.end)loadSummary()};
-$('customEnd').onchange=e=>{state.end=e.target.value;if(state.period==='custom'&&state.start&&state.end)loadSummary()};
+$('customStart').onchange=e=>{state.start=e.target.value;$('periodNote').classList.remove('open')};
+$('customEnd').onchange=e=>{state.end=e.target.value;$('periodNote').classList.remove('open')};
+$('applyCustomPeriod').onclick=()=>{
+  document.querySelectorAll('[data-period]').forEach(b=>b.classList.remove('active'));
+  document.querySelector('[data-period="custom"]').classList.add('active');
+  state.period='custom';
+  if(!state.start||!state.end){$('periodNote').classList.add('open');return}
+  $('periodNote').classList.remove('open');
+  loadSummary();
+};
 loadSummary();
 loadAuth();
 </script>

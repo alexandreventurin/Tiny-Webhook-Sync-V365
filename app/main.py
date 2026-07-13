@@ -801,6 +801,14 @@ def _dashboard_period(preset: str = "last_30", start: str | None = None, end: st
         start_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
         end_dt = datetime.fromisoformat(end).replace(tzinfo=timezone.utc) + timedelta(days=1)
         return start_dt, end_dt, f"{start_dt:%d/%m/%Y} a {(end_dt - timedelta(days=1)):%d/%m/%Y}"
+    if preset == "today":
+        start_dt = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+        return start_dt, now, "Hoje"
+    if preset == "yesterday":
+        yesterday = today - timedelta(days=1)
+        start_dt = datetime.combine(yesterday, datetime.min.time(), tzinfo=timezone.utc)
+        end_dt = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+        return start_dt, end_dt, "Ontem"
     if preset == "last_7":
         start_dt = datetime.combine(today - timedelta(days=7), datetime.min.time(), tzinfo=timezone.utc)
         return start_dt, now, "Últimos 7 dias"

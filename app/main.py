@@ -488,9 +488,13 @@ async def admin_db_ensure_indexes():
     p = await get_pool()
     executed = []
     async with p.acquire() as conn:
+        await conn.execute("SET statement_timeout = '5min'")
         for sql in statements:
-            await conn.execute(sql, timeout=300)
-            executed.append(sql)
+            try:
+                await conn.execute(sql, timeout=300)
+                executed.append(sql)
+            except Exception as exc:
+                return {"ok": False, "executed": executed, "failed_sql": sql, "error": str(exc)}
     return {"ok": True, "executed": executed}
 
 

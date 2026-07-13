@@ -1167,10 +1167,8 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
                    NULL::timestamptz AS approval_scheduled_at,
                    NULL::timestamptz AS transfer_scheduled_at
             FROM public.orders_a_snapshot so
-            WHERE so.updated_at >= NOW() - ($2::int || ' days')::interval
-            ORDER BY so.updated_at DESC
             LIMIT $1
-        """, min(limit * 3, 500), days)
+        """, min(limit * 3, 500))
         origin_ids = [str(row["venda_a_id"]) for row in origin_rows if row["venda_a_id"] is not None]
         mapped_origin_rows = await conn.fetch("""
             SELECT venda_a_id
@@ -1186,10 +1184,8 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
             FROM public.orders_map om
             LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
             LEFT JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = om.venda_c_id::text
-            WHERE om.updated_at >= NOW() - ($2::int || ' days')::interval
-            ORDER BY om.updated_at DESC
             LIMIT $1
-        """, limit, days)
+        """, limit)
         synced_count_row = {"total": len(synced_rows)}
         cancelled_review_rows = await conn.fetch("""
             SELECT venda_a_id, status, created_at, reviewed_at, updated_at

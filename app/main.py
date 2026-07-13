@@ -1144,31 +1144,21 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
         origin_rows = await conn.fetch("""
             SELECT so.venda_a_id, so.webhook_payload, so.fetched_payload, so.created_at, so.updated_at,
                    so.updated_at AS webhook_received_at,
-                   approve_job.run_after AS approval_scheduled_at,
-                   create_job.run_after AS transfer_scheduled_at
+                   NULL::timestamptz AS approval_scheduled_at,
+                   NULL::timestamptz AS transfer_scheduled_at
             FROM public.orders_a_snapshot so
-            LEFT JOIN public.orders_map om ON om.venda_a_id::text = so.venda_a_id
-            LEFT JOIN LATERAL (
-                SELECT run_after
-                FROM public.jobs
-                WHERE dedupe_key = 'A:vendas:' || so.venda_a_id || ':approve_order_a'
-                  AND status IN ('queued', 'running')
-                ORDER BY created_at DESC
-                LIMIT 1
-            ) approve_job ON true
-            LEFT JOIN LATERAL (
-                SELECT run_after
-                FROM public.jobs
-                WHERE dedupe_key = 'A:vendas:' || so.venda_a_id || ':create_order_c'
-                  AND status IN ('queued', 'running')
-                ORDER BY created_at DESC
-                LIMIT 1
-            ) create_job ON true
-            WHERE om.venda_a_id IS NULL
-              AND so.updated_at >= NOW() - ($2::int || ' days')::interval
+            WHERE so.updated_at >= NOW() - ($2::int || ' days')::interval
             ORDER BY so.updated_at DESC
             LIMIT $1
-        """, limit, days)
+        """, min(limit * 3, 500), days)
+        origin_ids = [str(row["venda_a_id"]) for row in origin_rows if row["venda_a_id"] is not None]
+        mapped_origin_rows = await conn.fetch("""
+            SELECT venda_a_id
+            FROM public.orders_map
+            WHERE venda_a_id::text = ANY($1::text[])
+        """, origin_ids) if origin_ids else []
+        mapped_origin_ids = {str(row["venda_a_id"]) for row in mapped_origin_rows}
+        origin_rows = [row for row in origin_rows if str(row["venda_a_id"]) not in mapped_origin_ids][:limit]
         synced_rows = await conn.fetch("""
             SELECT om.external_key, om.venda_a_id, om.venda_c_id, om.created_at, om.updated_at,
                    om.last_sync_status, om.last_sync_at, oas.fetched_payload,

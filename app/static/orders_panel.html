@@ -201,7 +201,7 @@ function renderAuthMini(){
 }
 
 function renderFilterOptions(){
-  const all=[...(state.data?.origin?.valid||[]),...(state.data?.origin?.needs_adjustment||[]),...(state.data?.origin?.do_not_export||[]),...(state.data?.synced||[])];
+  const all=[...(state.data?.origin?.scheduled||[]),...(state.data?.origin?.valid||[]),...(state.data?.origin?.needs_adjustment||[]),...(state.data?.origin?.do_not_export||[]),...(state.data?.synced||[])];
   const statuses=[...new Set(all.map(x=>x.situacao_a_label||x.situacao_label).filter(Boolean))].sort();
   const current=state.filters.originStatus;
   $('filterOriginStatus').innerHTML='<option value="">Todas</option>'+statuses.map(s=>`<option value="${esc(s)}" ${s===current?'selected':''}>${esc(s)}</option>`).join('');
@@ -215,8 +215,8 @@ function renderFilterOptions(){
 }
 
 function renderSummary(){
-  const d=state.data||{origin:{valid:[],needs_adjustment:[],do_not_export:[]},synced:[],errors:[],cancelled:{pending:[],reviewed:[]},queue:{items:[]}};
-  const scheduled=(d.origin.valid||[]).length+(d.origin.needs_adjustment||[]).length;
+  const d=state.data||{origin:{scheduled:[],valid:[],needs_adjustment:[],do_not_export:[]},synced:[],errors:[],cancelled:{pending:[],reviewed:[]},queue:{items:[]}};
+  const scheduled=(d.origin.scheduled||[]).length+(d.origin.valid||[]).length+(d.origin.needs_adjustment||[]).length;
   const divergent=(d.synced||[]).filter(x=>x.divergence_count>0).length;
   const syncedTotal=d.summary_counts?.synced_total??d.synced.length;
   const period=`Últimos ${esc(d.period_days||state.filters.days)} dias`;
@@ -238,7 +238,7 @@ function metricCard([label,value,tone,actionLabel,action]){
   return `<div class="metric ${esc(tone)}"><div><div class="value">${esc(value)}</div><div class="label">${esc(label)}</div></div>${actionHtml}</div>`;
 }
 function renderSubtabs(){
-  const d=state.data||{origin:{valid:[],needs_adjustment:[],do_not_export:[]},synced:[],errors:[],cancelled:{pending:[],reviewed:[]}};
+  const d=state.data||{origin:{scheduled:[],valid:[],needs_adjustment:[],do_not_export:[]},synced:[],errors:[],cancelled:{pending:[],reviewed:[]}};
   if(state.tab==='queue'){
     const queue=d.queue?.items||[];
     const sequence=queue.filter(x=>!x.is_future);
@@ -251,6 +251,7 @@ function renderSubtabs(){
     ].join('');
   }else if(state.tab==='origin'){
     const items=[
+      ['scheduled','Aguardando prazo',d.origin.scheduled.length],
       ['valid','Prontos para exportação',d.origin.valid.length],
       ['needs_adjustment','Precisam ajuste',d.origin.needs_adjustment.length],
       ['do_not_export','Não exportar',d.origin.do_not_export.length],
@@ -357,7 +358,7 @@ function bindSyncedRows(){
 }
 
 function renderTable(){
-  const d=state.data||{origin:{valid:[],needs_adjustment:[],do_not_export:[]},synced:[],errors:[],cancelled:{pending:[],reviewed:[]},queue:{items:[]}};
+  const d=state.data||{origin:{scheduled:[],valid:[],needs_adjustment:[],do_not_export:[]},synced:[],errors:[],cancelled:{pending:[],reviewed:[]},queue:{items:[]}};
   if(state.tab==='queue'){
     if(state.subtab==='webhooks'){
       let list=(state.events||[]).filter(matches);
@@ -380,7 +381,7 @@ function renderTable(){
     $('tableWrap').innerHTML=table(['Origem','Destino','Previsto','Data pedido','Cliente','Ecommerce','Última sincronização','Tarefa','Status','Erro'],queueRows(page.items))+loadMoreHtml(page);
     bindSyncedRows();
   }else if(state.tab==='origin'){
-    const sourceLists={valid:d.origin.valid||[],needs_adjustment:d.origin.needs_adjustment||[],do_not_export:d.origin.do_not_export||[]};
+    const sourceLists={scheduled:d.origin.scheduled||[],valid:d.origin.valid||[],needs_adjustment:d.origin.needs_adjustment||[],do_not_export:d.origin.do_not_export||[]};
     const list=(sourceLists[state.subtab]||sourceLists.valid).filter(matches).filter(matchesFilters);
     const page=visibleList(list);
     $('tableWrap').innerHTML=table(['Pedido','Data','Recebido/Enviado','Cliente','Ecommerce','Situação','Envio / Rastreio','Itens','Motivos'],page.items.map(x=>`

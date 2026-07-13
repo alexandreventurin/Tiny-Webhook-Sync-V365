@@ -1037,7 +1037,7 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
         block_reasons.append("deposito_nao_exportavel")
 
     status_normalized = normalize_status(payload.get("situacao")) if isinstance(payload, dict) else None
-    if status_normalized and status_normalized not in {"em_aberto", "aprovado", "pronto_envio", "enviado", "entregue"}:
+    if status_normalized and status_normalized not in {"em_aberto", "aprovado"}:
         block_reasons.append(f"status_nao_exportavel:{status_normalized}")
 
     missing_skus = []
@@ -1259,11 +1259,55 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
             FROM public.products_map
             WHERE id_c IS NOT NULL
         """)
+        origin_ids = [str(row["venda_a_id"]) for row in origin_rows if row["venda_a_id"] is not None]
+        failed_create_rows = []
+        if origin_ids:
+            failed_create_rows = await conn.fetch("""
+                SELECT DISTINCT ON (venda_a_id)
+                       venda_a_id, status, last_error, updated_at, created_at
+                FROM (
+                    SELECT COALESCE(payload::jsonb->>'venda_a_id', payload::jsonb->>'venda_id') AS venda_a_id,
+                           status, last_error, updated_at, created_at
+                    FROM public.jobs
+                    WHERE job_type = 'create_order_c'
+                      AND status IN ('failed', 'dead', 'waiting_sku')
+                      AND COALESCE(payload::jsonb->>'venda_a_id', payload::jsonb->>'venda_id') = ANY($1::text[])
+                ) failed
+                WHERE venda_a_id IS NOT NULL
+                ORDER BY venda_a_id, updated_at DESC NULLS LAST, created_at DESC
+            """, origin_ids)
 
     mapped_product_ids = {int(row["id_a"]) for row in mapped_product_rows if row["id_a"] is not None}
     cancelled_reviews = {str(row["venda_a_id"]): dict(row) for row in cancelled_review_rows}
+    failed_create_by_a = {
+        str(dict(row)["venda_a_id"]): {
+            "status": dict(row).get("status"),
+            "last_error": dict(row).get("last_error"),
+            "updated_at": dict(row).get("updated_at"),
+        }
+        for row in failed_create_rows
+    }
     origin_all = [_order_summary_from_snapshot(dict(row), mapped_product_ids) for row in origin_rows]
-    origin_valid = [item for item in origin_all if item["valid_for_export"]][:limit]
+    for item in origin_all:
+        failed_create = failed_create_by_a.get(str(item.get("venda_a_id") or ""))
+        if not failed_create:
+            continue
+        if item["export_category"] == "valid":
+            item["export_category"] = "needs_adjustment"
+            item["valid_for_export"] = False
+        item["last_create_error"] = failed_create.get("last_error")
+        item["last_create_error_status"] = failed_create.get("status")
+        item["adjustment_reasons"] = list(dict.fromkeys(item["adjustment_reasons"] + ["erro_criacao_c"]))
+        item["reasons"] = list(dict.fromkeys(item["adjustment_reasons"] + item["block_reasons"]))
+
+    origin_scheduled = [
+        item for item in origin_all
+        if item["valid_for_export"] and item.get("situacao_normalized") == "em_aberto"
+    ][:limit]
+    origin_valid = [
+        item for item in origin_all
+        if item["valid_for_export"] and item.get("situacao_normalized") != "em_aberto"
+    ][:limit]
     origin_needs_adjustment = [item for item in origin_all if item["export_category"] == "needs_adjustment"][:limit]
     origin_do_not_export = [item for item in origin_all if item["export_category"] == "do_not_export"][:limit]
     synced = []
@@ -1402,6 +1446,7 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
 
     return {
         "origin": {
+            "scheduled": origin_scheduled,
             "valid": origin_valid,
             "needs_adjustment": origin_needs_adjustment,
             "do_not_export": origin_do_not_export,
@@ -1414,6 +1459,7 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
         "errors": errors,
         "summary_counts": {
             "synced_total": int(synced_count_row["total"] or 0) if synced_count_row else len(synced),
+            "origin_scheduled_loaded": len(origin_scheduled),
             "origin_valid_loaded": len(origin_valid),
             "origin_needs_adjustment_loaded": len(origin_needs_adjustment),
             "origin_do_not_export_loaded": len(origin_do_not_export),

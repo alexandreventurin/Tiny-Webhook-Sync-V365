@@ -820,6 +820,15 @@ def _dashboard_period(preset: str = "last_30", start: str | None = None, end: st
         last_previous = first_this_month - timedelta(days=1)
         start_dt = datetime(last_previous.year, last_previous.month, 1, tzinfo=timezone.utc)
         return start_dt, first_this_month, "Mês anterior"
+    if preset == "previous_6_months":
+        first_this_month = datetime(today.year, today.month, 1, tzinfo=timezone.utc)
+        month = today.month - 6
+        year = today.year
+        while month <= 0:
+            month += 12
+            year -= 1
+        start_dt = datetime(year, month, 1, tzinfo=timezone.utc)
+        return start_dt, first_this_month, "6 meses anteriores"
     start_dt = datetime.combine(today - timedelta(days=30), datetime.min.time(), tzinfo=timezone.utc)
     return start_dt, now, "Últimos 30 dias"
 
@@ -1362,9 +1371,31 @@ async def admin_orders_panel_summary(
 
 
 @app.get("/admin/orders-panel/queue-data")
-async def admin_orders_panel_queue_data(limit: int = 120):
+async def admin_orders_panel_queue_data(
+    limit: int = 120,
+    period: str = "last_30",
+    start: str | None = None,
+    end: str | None = None,
+    types: str | None = None,
+    statuses: str | None = None,
+    accounts: str | None = None,
+):
     from app.db import get_pool
     limit = max(10, min(limit, 500))
+    start_dt, end_dt, _period_label = _dashboard_period(period, start, end)
+    type_filters = [item.strip() for item in (types or "").split(",") if item.strip()]
+    account_filters = [item.strip() for item in (accounts or "").split(",") if item.strip()]
+    status_filter_values = [item.strip() for item in (statuses or "").split(",") if item.strip()]
+    raw_status_filters = []
+    for value in status_filter_values:
+        if value == "concluido":
+            raw_status_filters.append("done")
+        elif value == "erro":
+            raw_status_filters.extend(["failed", "dead", "waiting_sku", "skipped_not_mapped"])
+        elif value == "aguardando":
+            raw_status_filters.extend(["queued", "running"])
+        else:
+            raw_status_filters.append(value)
     p = await get_pool()
     async with p.acquire() as conn:
         queue_rows = await conn.fetch("""
@@ -1405,13 +1436,20 @@ async def admin_orders_panel_queue_data(limit: int = 120):
                 oma.venda_c_id::text,
                 omc.venda_c_id::text
             )
-            WHERE j.status IN ('queued', 'running', 'failed', 'dead', 'waiting_sku', 'skipped_not_mapped')
-               OR j.created_at >= NOW() - INTERVAL '2 days'
-               OR j.updated_at >= NOW() - INTERVAL '2 days'
-               OR j.run_after >= NOW() - INTERVAL '2 days'
+            WHERE (
+                    j.status IN ('queued', 'running')
+                    OR COALESCE(j.run_after, j.updated_at, j.created_at) >= $2
+                   )
+              AND COALESCE(j.run_after, j.updated_at, j.created_at) < $3
+              AND (COALESCE(array_length($4::text[], 1), 0) = 0 OR j.job_type = ANY($4::text[]))
+              AND (COALESCE(array_length($5::text[], 1), 0) = 0 OR j.status = ANY($5::text[]))
+              AND (
+                    COALESCE(array_length($6::text[], 1), 0) = 0
+                    OR j.payload::jsonb->>'source' = ANY($6::text[])
+                  )
             ORDER BY COALESCE(j.run_after, j.updated_at, j.created_at) DESC
             LIMIT $1
-        """, limit)
+        """, limit, start_dt, end_dt, type_filters, raw_status_filters, account_filters)
         mapped_product_rows = await conn.fetch("""
             SELECT id_a
             FROM public.products_map

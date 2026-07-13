@@ -42,9 +42,12 @@ from app.worker import worker_loop, stop_worker, run_worker_once, run_worker_onc
 async def lifespan(app: FastAPI):
     await init_db()
     from app.db import recover_stale_import_runs
-    recovered = await recover_stale_import_runs()
-    if recovered:
-        logging.getLogger(__name__).info(f"Recovered {recovered} stale import run(s) from previous restart")
+    try:
+        recovered = await recover_stale_import_runs()
+        if recovered:
+            logging.getLogger(__name__).info(f"Recovered {recovered} stale import run(s) from previous restart")
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Could not recover stale import runs during startup: %s", exc)
     worker_task = asyncio.create_task(worker_loop())
     yield
     stop_worker()

@@ -2,6 +2,7 @@ import asyncpg
 import ssl
 import json
 import logging
+import os
 from typing import Optional
 from datetime import datetime
 
@@ -29,6 +30,10 @@ async def init_db():
             timeout=30,
             statement_cache_size=0
         )
+
+        if os.getenv("RUN_DB_SCHEMA_ON_STARTUP", "0").lower() not in ("1", "true", "yes"):
+            logger.info("Database connected; schema initialization skipped on startup")
+            return
         
         async with pool.acquire() as conn:
             await conn.execute("""
@@ -323,8 +328,7 @@ async def init_db():
             
         logger.info("Database connected and tables created")
     except Exception as e:
-        logger.error(f"Failed to connect to database: {e}")
-        raise
+        logger.error(f"Failed to initialize database: {e}", exc_info=True)
 
 
 async def close_db():

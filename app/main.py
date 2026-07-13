@@ -359,6 +359,21 @@ async def webhook_a_vendas(request: Request):
     return await process_webhook(request, source="A", topic="vendas")
 
 
+@app.post("/webhooks/a", response_model=WebhookResponse)
+async def webhook_a_vendas_short(request: Request):
+    return await process_webhook(request, source="A", topic="vendas")
+
+
+@app.post("/webhook/a", response_model=WebhookResponse)
+async def webhook_a_vendas_legacy_short(request: Request):
+    return await process_webhook(request, source="A", topic="vendas")
+
+
+@app.post("/webhook/a/vendas", response_model=WebhookResponse)
+async def webhook_a_vendas_legacy(request: Request):
+    return await process_webhook(request, source="A", topic="vendas")
+
+
 @app.post("/webhooks/rejuderme/vendas", response_model=WebhookResponse)
 async def webhook_rejuderme_vendas(request: Request):
     return await process_webhook(request, source="A", topic="vendas")
@@ -367,6 +382,34 @@ async def webhook_rejuderme_vendas(request: Request):
 @app.post("/webhooks/c/vendas", response_model=WebhookResponse)
 async def webhook_c_vendas(request: Request):
     return await process_webhook(request, source="B", topic="vendas")
+
+
+@app.post("/webhooks/c", response_model=WebhookResponse)
+async def webhook_c_vendas_short(request: Request):
+    return await process_webhook(request, source="B", topic="vendas")
+
+
+@app.post("/webhook/c", response_model=WebhookResponse)
+async def webhook_c_vendas_legacy_short(request: Request):
+    return await process_webhook(request, source="B", topic="vendas")
+
+
+@app.post("/webhook/c/vendas", response_model=WebhookResponse)
+async def webhook_c_vendas_legacy(request: Request):
+    return await process_webhook(request, source="B", topic="vendas")
+
+
+@app.get("/webhooks/a/vendas")
+@app.get("/webhooks/a")
+@app.get("/webhook/a")
+@app.get("/webhook/a/vendas")
+@app.get("/webhooks/rejuderme/vendas")
+@app.get("/webhooks/c/vendas")
+@app.get("/webhooks/c")
+@app.get("/webhook/c")
+@app.get("/webhook/c/vendas")
+async def webhook_connectivity_check():
+    return {"ok": True, "status": "ready"}
 
 
 @app.post("/webhooks/c/notas", response_model=WebhookResponse)

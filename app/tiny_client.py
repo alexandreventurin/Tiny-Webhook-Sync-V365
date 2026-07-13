@@ -197,17 +197,28 @@ class TinyClient:
                 raise TinyApiError(response.status_code, response.text, url)
         logger.info(f"Updated order {pedido_id} despacho: codigo={codigo_rastreamento}")
 
-    async def list_orders(self, pagina: int = 1, data_inicial: str = None, data_final: str = None, limite: int = 100, sort: str = None) -> dict:
+    async def list_orders(
+        self,
+        data_inicial: str = None,
+        data_final: str = None,
+        limit: int = 100,
+        offset: int = 0,
+        situacao: int | None = None,
+        sort: str = None,
+    ) -> dict:
         url = f"{self._base_url}/pedidos"
-        params = {"pagina": pagina, "limite": min(limite, 100)}
+        params = {"limit": min(limit, 100), "offset": max(0, offset)}
         if data_inicial:
             params["dataInicial"] = data_inicial
         if data_final:
             params["dataFinal"] = data_final
+        if situacao is not None:
+            params["situacao"] = situacao
         if sort:
             params["sort"] = sort
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, headers=self._headers(), params=params)
+            self._read_ratelimit_headers(response)
             if response.status_code != 200:
                 raise TinyApiError(response.status_code, response.text, url)
             return response.json()

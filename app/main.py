@@ -987,6 +987,7 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
         forma_frete = {}
     if not isinstance(transportador, dict):
         transportador = {}
+    source_kind = payload.get("__source") if isinstance(payload, dict) else None
 
     billing_address = _normalize_address(endereco_faturamento)
     delivery_address = _normalize_address(endereco_entrega)
@@ -999,7 +1000,7 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
         adjustment_reasons.append("cliente_sem_nome")
     if not cliente.get("cpfCnpj"):
         adjustment_reasons.append("cliente_sem_cpf_cnpj")
-    if not itens:
+    if not itens and source_kind != "list_orders":
         adjustment_reasons.append("sem_itens")
     if not payload:
         adjustment_reasons.append("sem_detalhes_do_pedido")
@@ -1007,6 +1008,13 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
     deposito = payload.get("deposito") if isinstance(payload, dict) else {}
     deposito_id = deposito.get("id") if isinstance(deposito, dict) else None
     if deposito_id and str(deposito_id) != "336403602":
+        block_reasons.append("deposito_nao_exportavel")
+
+    forma_envio_nome = _normalize_text(_first_present(
+        _object_name(forma_envio),
+        _object_name(transportador.get("formaEnvio") if isinstance(transportador, dict) else None),
+    )).lower()
+    if forma_envio_nome in {"mercado envios", "tiktok shipping"}:
         block_reasons.append("deposito_nao_exportavel")
 
     status_normalized = normalize_status(payload.get("situacao")) if isinstance(payload, dict) else None
@@ -1028,6 +1036,9 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
             })
     if missing_skus:
         adjustment_reasons.append("produto_sem_mapeamento")
+
+    adjustment_reasons = list(dict.fromkeys(adjustment_reasons))
+    block_reasons = list(dict.fromkeys(block_reasons))
 
     if block_reasons:
         export_category = "do_not_export"
@@ -1480,6 +1491,136 @@ async def admin_orders_panel_sync_divergences(request: Request):
         "selected_field_keys": selected_keys,
         "candidates": candidates,
         "created": created,
+    }
+
+
+@app.post("/admin/orders-panel/origin/sync-list")
+async def admin_orders_panel_sync_origin_list(
+    days: int = 60,
+    max_pages: int = 200,
+    start_offset: int = 0,
+    sleep_ms: int = 800,
+):
+    from app.tiny_oauth import ensure_access_token
+    from app.tiny_client import TinyApiError, TinyClient
+
+    days = max(1, min(days, 365))
+    max_pages = max(1, min(max_pages, 500))
+    start_offset = max(0, start_offset)
+    sleep_ms = max(0, min(sleep_ms, 5000))
+    data_inicial = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+    data_final = datetime.now(timezone.utc).date().isoformat()
+
+    token_a = await ensure_access_token("A")
+    if not token_a:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Token do Tiny A indisponível."})
+
+    p = await get_pool()
+    client_a = TinyClient(token_a)
+    offset = start_offset
+    page_limit = 100
+    total_remote = None
+    scanned = 0
+    skipped_mapped = 0
+    upserted = 0
+    marketplace_shipping = 0
+    sample_ids = []
+
+    async with p.acquire() as conn:
+        for _page in range(max_pages):
+            try:
+                data = await client_a.list_orders(
+                    data_inicial=data_inicial,
+                    data_final=data_final,
+                    limit=page_limit,
+                    offset=offset,
+                )
+            except TinyApiError as exc:
+                return JSONResponse(status_code=200, content={
+                    "ok": False,
+                    "error": "Tiny recusou uma pagina da listagem. A atualizacao parcial foi salva e pode ser retomada.",
+                    "tiny_status": exc.status_code,
+                    "tiny_response": str(exc)[:500],
+                    "failed_offset": offset,
+                    "resume_url": f"/admin/orders-panel/origin/sync-list?days={days}&max_pages={max_pages}&start_offset={offset}&sleep_ms={sleep_ms}",
+                    "days": days,
+                    "data_inicial": data_inicial,
+                    "data_final": data_final,
+                    "remote_total": total_remote,
+                    "scanned": scanned,
+                    "skipped_already_synced": skipped_mapped,
+                    "upserted_origin_snapshots": upserted,
+                    "marketplace_shipping_not_exportable_candidates": marketplace_shipping,
+                    "sample_ids": sample_ids,
+                })
+            items = data.get("itens") if isinstance(data, dict) else []
+            pagination = data.get("paginacao") if isinstance(data, dict) else {}
+            total_remote = pagination.get("total", total_remote) if isinstance(pagination, dict) else total_remote
+            if not items:
+                break
+
+            ids = [str(item.get("id")) for item in items if isinstance(item, dict) and item.get("id")]
+            mapped_rows = await conn.fetch("""
+                SELECT venda_a_id::text AS venda_a_id
+                FROM public.orders_map
+                WHERE venda_a_id::text = ANY($1::text[])
+            """, ids) if ids else []
+            mapped_ids = {str(row["venda_a_id"]) for row in mapped_rows}
+
+            for item in items:
+                if not isinstance(item, dict) or not item.get("id"):
+                    continue
+                scanned += 1
+                venda_a_id = str(item.get("id"))
+                if venda_a_id in mapped_ids:
+                    skipped_mapped += 1
+                    continue
+                payload = dict(item)
+                payload["__source"] = "list_orders"
+                payload["__synced_from"] = "admin_origin_sync_list"
+                payload["__synced_at"] = datetime.now(timezone.utc).isoformat()
+
+                transportador = payload.get("transportador") if isinstance(payload.get("transportador"), dict) else {}
+                forma_envio = transportador.get("formaEnvio") if isinstance(transportador.get("formaEnvio"), dict) else {}
+                forma_envio_nome = _normalize_text(forma_envio.get("nome") or transportador.get("nome")).lower()
+                if forma_envio_nome in {"mercado envios", "tiktok shipping"}:
+                    marketplace_shipping += 1
+
+                await conn.execute("""
+                    INSERT INTO public.orders_a_snapshot (venda_a_id, webhook_payload, needs_fetch, updated_at)
+                    VALUES ($1::text, $2::jsonb, true, NOW())
+                    ON CONFLICT (venda_a_id) DO UPDATE SET
+                        webhook_payload = EXCLUDED.webhook_payload,
+                        needs_fetch = COALESCE(public.orders_a_snapshot.needs_fetch, true),
+                        updated_at = NOW()
+                """, venda_a_id, json.dumps(payload, ensure_ascii=False))
+                upserted += 1
+                if len(sample_ids) < 10:
+                    sample_ids.append(venda_a_id)
+
+            offset += len(items)
+            if len(items) < page_limit:
+                break
+            if total_remote is not None and offset >= int(total_remote):
+                break
+            if client_a.last_ratelimit_remaining is not None and client_a.last_ratelimit_remaining < 10:
+                await asyncio.sleep(max(1, client_a.last_ratelimit_reset or 60))
+            elif sleep_ms:
+                await asyncio.sleep(sleep_ms / 1000)
+
+    return {
+        "ok": True,
+        "days": days,
+        "data_inicial": data_inicial,
+        "data_final": data_final,
+        "remote_total": total_remote,
+        "start_offset": start_offset,
+        "next_offset": offset,
+        "scanned": scanned,
+        "skipped_already_synced": skipped_mapped,
+        "upserted_origin_snapshots": upserted,
+        "marketplace_shipping_not_exportable_candidates": marketplace_shipping,
+        "sample_ids": sample_ids,
     }
 
 

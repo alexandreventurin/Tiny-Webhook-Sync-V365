@@ -24,10 +24,10 @@ async def init_db():
         pool = await asyncpg.create_pool(
             DATABASE_URL,
             min_size=1,
-            max_size=10,
+            max_size=int(os.getenv("DB_POOL_MAX_SIZE", "3")),
             ssl=ssl_context,
-            command_timeout=60,
-            timeout=30,
+            command_timeout=int(os.getenv("DB_COMMAND_TIMEOUT_SECONDS", "30")),
+            timeout=int(os.getenv("DB_CONNECT_TIMEOUT_SECONDS", "20")),
             statement_cache_size=0
         )
 

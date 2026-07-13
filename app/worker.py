@@ -1350,8 +1350,9 @@ async def _requeue_remaining_jobs(jobs: list[dict], delay_minutes: int = 2):
         logger.info(f"Rate limit: requeued {len(jobs)} remaining jobs with {delay_minutes}min delay")
 
 
-async def run_worker_once(limit: int = 25) -> int:
-    await reset_stale_locks()
+async def run_worker_once(limit: int = 25, reset_locks: bool = False) -> int:
+    if reset_locks:
+        await reset_stale_locks()
 
     jobs = await fetch_and_lock_jobs(limit=limit)
 
@@ -1369,8 +1370,9 @@ async def run_worker_once(limit: int = 25) -> int:
     return len(jobs)
 
 
-async def run_worker_once_detailed(limit: int = 50) -> dict:
-    await reset_stale_locks()
+async def run_worker_once_detailed(limit: int = 50, reset_locks: bool = True) -> dict:
+    if reset_locks:
+        await reset_stale_locks()
 
     jobs = await fetch_and_lock_jobs(limit=limit)
     locked = len(jobs)
@@ -1391,6 +1393,10 @@ async def run_worker_once_detailed(limit: int = 50) -> dict:
 
 TOKEN_REFRESH_MARGIN_MINUTES = 30
 TOKEN_CHECK_INTERVAL_SECONDS = 1800
+WORKER_POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "30"))
+WORKER_BATCH_SIZE = int(os.getenv("WORKER_BATCH_SIZE", "3"))
+WORKER_HEARTBEAT_SECONDS = int(os.getenv("WORKER_HEARTBEAT_SECONDS", "120"))
+WORKER_STALE_LOCK_RESET_SECONDS = int(os.getenv("WORKER_STALE_LOCK_RESET_SECONDS", "300"))
 
 async def maybe_refresh_tokens():
     """Renova tokens proativamente. Faz refresh se expirado, expirando em breve (<30min), ou updated_at > 3h."""
@@ -1434,22 +1440,33 @@ async def maybe_refresh_tokens():
 
 
 _last_token_check = None
+_last_heartbeat = None
+_last_stale_lock_reset = None
 
 async def worker_loop():
-    global worker_running, _last_token_check
+    global worker_running, _last_token_check, _last_heartbeat, _last_stale_lock_reset
     worker_running = True
     await refresh_products_map()
     logger.info("Worker started")
-    
+
     _last_token_check = datetime.now(timezone.utc)
+    _last_heartbeat = None
+    _last_stale_lock_reset = None
     await maybe_refresh_tokens()
-    
+
     while worker_running:
-        # Heartbeat: sinaliza ao /health que o worker está vivo
-        try:
-            await update_worker_heartbeat()
-        except Exception:
-            pass  # heartbeat nunca deve derrubar o loop
+        now = datetime.now(timezone.utc)
+        if _last_heartbeat is None or (now - _last_heartbeat).total_seconds() >= WORKER_HEARTBEAT_SECONDS:
+            try:
+                await update_worker_heartbeat()
+                _last_heartbeat = now
+            except Exception:
+                pass
+
+        reset_locks = False
+        if _last_stale_lock_reset is None or (now - _last_stale_lock_reset).total_seconds() >= WORKER_STALE_LOCK_RESET_SECONDS:
+            reset_locks = True
+            _last_stale_lock_reset = now
 
         import time as _time
         max_cooldown = 0
@@ -1462,21 +1479,21 @@ async def worker_loop():
             await asyncio.sleep(min(max_cooldown, 30))
         else:
             try:
-                processed = await run_worker_once(limit=10)
+                processed = await run_worker_once(limit=WORKER_BATCH_SIZE, reset_locks=reset_locks)
                 if processed > 0:
                     logger.info(f"Worker processed {processed} jobs")
             except Exception as e:
                 logger.error(f"Worker error: {e}")
-        
+                await asyncio.sleep(max(WORKER_POLL_SECONDS, 60))
+
         now = datetime.now(timezone.utc)
         if _last_token_check is None or (now - _last_token_check).total_seconds() > TOKEN_CHECK_INTERVAL_SECONDS:
             _last_token_check = now
             await maybe_refresh_tokens()
-        
-        await asyncio.sleep(5)
-    
-    logger.info("Worker stopped")
 
+        await asyncio.sleep(WORKER_POLL_SECONDS)
+
+    logger.info("Worker stopped")
 
 def stop_worker():
     global worker_running

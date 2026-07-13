@@ -512,6 +512,8 @@ async def process_job(job: dict) -> None:
                 "venda_id": str(venda_id),
                 "codigo_situacao": "aprovado",
             }
+            if payload.get("origin"):
+                create_order_payload["origin"] = payload.get("origin")
             create_job_created = await insert_job(job_type="create_order_c", dedupe_key=create_order_dedupe_key, event_id=None, payload=create_order_payload)
             action_preview = {
                 "would": "approve_order_a",
@@ -1371,7 +1373,6 @@ async def process_job(job: dict) -> None:
 
             a_details = await call_tiny("A", client_a, "get_order_details", venda_a_id_str)
             a_situacao_raw = (a_details or {}).get("situacao")
-            from app.utils import normalize_status
             a_status_name = normalize_status(a_situacao_raw)
             a_rank = STATUS_RANK.get(a_status_name or "", 0)
 

@@ -399,7 +399,10 @@ async def fetch_and_lock_jobs(limit: int = 25) -> list[dict]:
             WHERE id IN (
                 SELECT id FROM public.jobs
                 WHERE status = 'queued' AND (run_after IS NULL OR run_after <= NOW())
-                ORDER BY created_at ASC
+                ORDER BY
+                    CASE WHEN payload::jsonb->>'origin' = 'admin_export_ready' THEN 0 ELSE 1 END,
+                    COALESCE(run_after, created_at) ASC,
+                    created_at ASC
                 LIMIT $1
                 FOR UPDATE SKIP LOCKED
             )
@@ -564,14 +567,14 @@ async def update_job_failed(job_id, error: str, attempts: int) -> None:
         try:
             await conn.execute("""
                 UPDATE public.jobs
-                SET status = $2, last_error = $3, attempts = $4, last_attempt_at = NOW(), locked_at = NULL, locked_by = NULL
+                SET status = $2, last_error = $3, attempts = $4, last_attempt_at = NOW(), locked_at = NULL, locked_by = NULL, updated_at = NOW()
                 WHERE id = $1
             """, job_id, new_status, error, attempts)
         except Exception:
             try:
                 await conn.execute("""
                     UPDATE public.jobs
-                    SET status = $2, locked_at = NULL, locked_by = NULL
+                    SET status = $2, locked_at = NULL, locked_by = NULL, updated_at = NOW()
                     WHERE id = $1
                 """, job_id, new_status)
             except Exception as e:

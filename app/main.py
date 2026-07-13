@@ -774,6 +774,25 @@ def _format_order_date(value) -> str | None:
     return text
 
 
+def _parse_order_date(value) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    for separator in ("T", " "):
+        if separator in text:
+            text = text.split(separator)[0]
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+        except Exception:
+            pass
+    try:
+        parsed = datetime.fromisoformat(text)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
 def _money_value(value):
     if value in (None, ""):
         return None
@@ -1018,7 +1037,7 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
         block_reasons.append("deposito_nao_exportavel")
 
     status_normalized = normalize_status(payload.get("situacao")) if isinstance(payload, dict) else None
-    if status_normalized and status_normalized not in {"aprovado", "pronto_envio", "enviado", "entregue"}:
+    if status_normalized and status_normalized not in {"em_aberto", "aprovado", "pronto_envio", "enviado", "entregue"}:
         block_reasons.append(f"status_nao_exportavel:{status_normalized}")
 
     missing_skus = []
@@ -1157,16 +1176,12 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
                    NULL::timestamptz AS approval_scheduled_at,
                    NULL::timestamptz AS transfer_scheduled_at
             FROM public.orders_a_snapshot so
+            LEFT JOIN public.orders_map om ON om.venda_a_id::text = so.venda_a_id::text
+            WHERE om.venda_a_id IS NULL
+              AND so.updated_at >= NOW() - ($2::int || ' days')::interval
+            ORDER BY so.updated_at DESC
             LIMIT $1
-        """, min(limit * 3, 500))
-        origin_ids = [str(row["venda_a_id"]) for row in origin_rows if row["venda_a_id"] is not None]
-        mapped_origin_rows = await conn.fetch("""
-            SELECT venda_a_id
-            FROM public.orders_map
-            WHERE venda_a_id::text = ANY($1::text[])
-        """, origin_ids) if origin_ids else []
-        mapped_origin_ids = {str(row["venda_a_id"]) for row in mapped_origin_rows}
-        origin_rows = [row for row in origin_rows if str(row["venda_a_id"]) not in mapped_origin_ids][:limit]
+        """, min(limit * 12, 5000), days)
         synced_rows = await conn.fetch("""
             SELECT om.external_key, om.venda_a_id, om.venda_c_id, om.created_at, om.updated_at,
                    om.last_sync_status, om.last_sync_at, oas.fetched_payload,
@@ -1176,7 +1191,11 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
             LEFT JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = om.venda_c_id::text
             LIMIT $1
         """, limit)
-        synced_count_row = {"total": len(synced_rows)}
+        synced_count_row = await conn.fetchrow("""
+            SELECT COUNT(*)::int AS total
+            FROM public.orders_map
+            WHERE venda_c_id IS NOT NULL
+        """)
         cancelled_review_rows = await conn.fetch("""
             SELECT venda_a_id, status, created_at, reviewed_at, updated_at
             FROM public.cancelled_order_reviews
@@ -1243,7 +1262,10 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
 
     mapped_product_ids = {int(row["id_a"]) for row in mapped_product_rows if row["id_a"] is not None}
     cancelled_reviews = {str(row["venda_a_id"]): dict(row) for row in cancelled_review_rows}
-    origin = [_order_summary_from_snapshot(dict(row), mapped_product_ids) for row in origin_rows]
+    origin_all = [_order_summary_from_snapshot(dict(row), mapped_product_ids) for row in origin_rows]
+    origin_valid = [item for item in origin_all if item["valid_for_export"]][:limit]
+    origin_needs_adjustment = [item for item in origin_all if item["export_category"] == "needs_adjustment"][:limit]
+    origin_do_not_export = [item for item in origin_all if item["export_category"] == "do_not_export"][:limit]
     synced = []
     for row in synced_rows:
         item = dict(row)
@@ -1380,9 +1402,9 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
 
     return {
         "origin": {
-            "valid": [item for item in origin if item["valid_for_export"]],
-            "needs_adjustment": [item for item in origin if item["export_category"] == "needs_adjustment"],
-            "do_not_export": [item for item in origin if item["export_category"] == "do_not_export"],
+            "valid": origin_valid,
+            "needs_adjustment": origin_needs_adjustment,
+            "do_not_export": origin_do_not_export,
         },
         "synced": synced,
         "cancelled": {
@@ -1392,6 +1414,9 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
         "errors": errors,
         "summary_counts": {
             "synced_total": int(synced_count_row["total"] or 0) if synced_count_row else len(synced),
+            "origin_valid_loaded": len(origin_valid),
+            "origin_needs_adjustment_loaded": len(origin_needs_adjustment),
+            "origin_do_not_export_loaded": len(origin_do_not_export),
         },
         "queue": {
             "items": queue_items,
@@ -1622,6 +1647,185 @@ async def admin_orders_panel_sync_origin_list(
         "marketplace_shipping_not_exportable_candidates": marketplace_shipping,
         "sample_ids": sample_ids,
     }
+
+
+@app.post("/admin/orders-panel/origin/export-ready")
+async def admin_orders_panel_export_ready(days: int = 60, cutoff: str = "2026-07-10", limit: int = 5000, dry_run: bool = False):
+    days = max(1, min(days, 365))
+    limit = max(1, min(limit, 10000))
+    cutoff_dt = _parse_order_date(cutoff)
+    if not cutoff_dt:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "cutoff invalido. Use YYYY-MM-DD."})
+
+    p = await get_pool()
+    async with p.acquire() as conn:
+        mapped_product_rows = await conn.fetch("""
+            SELECT id_a
+            FROM public.products_map
+            WHERE id_c IS NOT NULL
+        """)
+        mapped_product_ids = {int(row["id_a"]) for row in mapped_product_rows if row["id_a"] is not None}
+        rows = await conn.fetch("""
+            SELECT so.venda_a_id, so.webhook_payload, so.fetched_payload, so.created_at, so.updated_at,
+                   so.updated_at AS webhook_received_at,
+                   NULL::timestamptz AS approval_scheduled_at,
+                   NULL::timestamptz AS transfer_scheduled_at
+            FROM public.orders_a_snapshot so
+            LEFT JOIN public.orders_map om ON om.venda_a_id::text = so.venda_a_id::text
+            WHERE om.venda_a_id IS NULL
+              AND so.updated_at >= NOW() - ($1::int || ' days')::interval
+            ORDER BY so.updated_at DESC
+            LIMIT $2
+        """, days, limit)
+
+    scanned = 0
+    ready_approved = 0
+    ready_open_old = 0
+    queued_create = 0
+    queued_approve = 0
+    already_had_job = 0
+    skipped = {
+        "not_ready": 0,
+        "status_not_allowed": 0,
+        "open_not_old_enough": 0,
+        "missing_date": 0,
+    }
+    sample_jobs = []
+
+    for row in rows:
+        scanned += 1
+        summary = _order_summary_from_snapshot(dict(row), mapped_product_ids)
+        venda_a_id = str(summary.get("venda_a_id") or "")
+        if not venda_a_id:
+            skipped["not_ready"] += 1
+            continue
+        if not summary.get("valid_for_export"):
+            skipped["not_ready"] += 1
+            continue
+
+        status = summary.get("situacao_normalized")
+        order_dt = _parse_order_date(summary.get("data_hora") or summary.get("data"))
+        job_type = None
+        dedupe_key = None
+        payload = None
+
+        if status == "aprovado":
+            ready_approved += 1
+            job_type = "create_order_c"
+            dedupe_key = f"A:vendas:{venda_a_id}:create_order_c"
+            payload = {
+                "source": "A",
+                "topic": "vendas",
+                "venda_id": venda_a_id,
+                "codigo_situacao": "aprovado",
+                "origin": "admin_export_ready",
+            }
+        elif status == "em_aberto":
+            if not order_dt:
+                skipped["missing_date"] += 1
+                continue
+            if order_dt.date() >= cutoff_dt.date():
+                skipped["open_not_old_enough"] += 1
+                continue
+            ready_open_old += 1
+            job_type = "approve_order_a"
+            dedupe_key = f"A:vendas:{venda_a_id}:approve_order_a"
+            payload = {
+                "source": "A",
+                "topic": "vendas",
+                "venda_id": venda_a_id,
+                "codigo_situacao": "em_aberto",
+                "origin": "admin_export_ready",
+            }
+        else:
+            skipped["status_not_allowed"] += 1
+            continue
+
+        created = False if dry_run else await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=payload)
+        if dry_run or created:
+            if job_type == "create_order_c":
+                queued_create += 1
+            else:
+                queued_approve += 1
+            if len(sample_jobs) < 20:
+                sample_jobs.append({"venda_a_id": venda_a_id, "job_type": job_type, "status": status, "data": summary.get("data")})
+        else:
+            already_had_job += 1
+
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "days": days,
+        "cutoff": cutoff_dt.date().isoformat(),
+        "scanned_unsynced_snapshots": scanned,
+        "ready_approved": ready_approved,
+        "ready_open_before_cutoff": ready_open_old,
+        "queued_create_order_c": queued_create,
+        "queued_approve_order_a": queued_approve,
+        "already_had_job_or_not_requeued": already_had_job,
+        "skipped": skipped,
+        "sample_jobs": sample_jobs,
+    }
+
+
+@app.get("/admin/orders-panel/origin/export-ready/status")
+async def admin_orders_panel_export_ready_status():
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT job_type, status, COUNT(*)::int AS total
+            FROM public.jobs
+            WHERE payload::jsonb->>'origin' = 'admin_export_ready'
+            GROUP BY job_type, status
+            ORDER BY job_type, status
+        """)
+        recent_errors = await conn.fetch("""
+            SELECT id, job_type, status, payload::jsonb->>'venda_id' AS venda_a_id, last_error, updated_at
+            FROM public.jobs
+            WHERE payload::jsonb->>'origin' = 'admin_export_ready'
+              AND status IN ('failed', 'dead', 'waiting_sku', 'skipped_not_mapped')
+            ORDER BY COALESCE(updated_at, created_at) DESC
+            LIMIT 20
+        """)
+        recent_done = await conn.fetch("""
+            SELECT id, job_type, payload::jsonb->>'venda_id' AS venda_a_id, action_preview, updated_at
+            FROM public.jobs
+            WHERE payload::jsonb->>'origin' = 'admin_export_ready'
+              AND status = 'done'
+            ORDER BY updated_at DESC
+            LIMIT 20
+        """)
+    return {
+        "ok": True,
+        "counts": [dict(row) for row in rows],
+        "recent_errors": [dict(row) for row in recent_errors],
+        "recent_done": [dict(row) for row in recent_done],
+    }
+
+
+@app.post("/admin/orders-panel/origin/export-ready/adopt-chained")
+async def admin_orders_panel_export_ready_adopt_chained():
+    p = await get_pool()
+    async with p.acquire() as conn:
+        result = await conn.execute("""
+            WITH approved AS (
+                SELECT DISTINCT payload::jsonb->>'venda_id' AS venda_a_id
+                FROM public.jobs
+                WHERE job_type = 'approve_order_a'
+                  AND payload::jsonb->>'origin' = 'admin_export_ready'
+                  AND payload::jsonb->>'venda_id' IS NOT NULL
+            )
+            UPDATE public.jobs j
+            SET payload = j.payload::jsonb || jsonb_build_object('origin', 'admin_export_ready'),
+                updated_at = NOW()
+            FROM approved
+            WHERE j.job_type = 'create_order_c'
+              AND j.status = 'queued'
+              AND j.payload::jsonb->>'origin' IS NULL
+              AND j.payload::jsonb->>'venda_id' = approved.venda_a_id
+        """)
+    updated = int(result.split()[-1]) if result else 0
+    return {"ok": True, "updated": updated}
 
 
 @app.post("/admin/orders-panel/cancelled/mark-reviewed")

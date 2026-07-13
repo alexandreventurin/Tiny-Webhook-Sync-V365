@@ -469,6 +469,26 @@ async def admin_health_details():
     )
 
 
+@app.post("/admin/db/ensure-indexes")
+async def admin_db_ensure_indexes():
+    from app.db import get_pool
+    statements = [
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_orders_a_snapshot_updated_at ON public.orders_a_snapshot(updated_at DESC)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_orders_map_updated_at ON public.orders_map(updated_at DESC)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_orders_map_venda_a_text ON public.orders_map((venda_a_id::text))",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_orders_map_venda_c_text ON public.orders_map((venda_c_id::text))",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_jobs_updated_at ON public.jobs(updated_at DESC)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_jobs_run_after ON public.jobs(run_after DESC)",
+    ]
+    p = await get_pool()
+    executed = []
+    async with p.acquire() as conn:
+        for sql in statements:
+            await conn.execute(sql, timeout=300)
+            executed.append(sql)
+    return {"ok": True, "executed": executed}
+
+
 @app.get("/admin/jobs", response_model=JobsListResponse)
 async def admin_jobs(status: str | None = None, job_type: str | None = None, limit: int = 50):
     jobs = await get_jobs_list(status=status, limit=limit, job_type=job_type)

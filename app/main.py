@@ -66,7 +66,7 @@ ADMIN_SESSION_MAX_AGE = int(os.getenv("ADMIN_SESSION_MAX_AGE", str(8 * 60 * 60))
 ADMIN_SESSION_SECRET = os.getenv("ADMIN_SESSION_SECRET") or hashlib.sha256(
     f"{ADMIN_USERNAME}:{ADMIN_PASSWORD}:{APP_BUILD}".encode("utf-8")
 ).hexdigest()
-PROTECTED_PATHS = ("/admin", "/dashboard", "/orders-panel")
+PROTECTED_PATHS = ("/admin", "/dashboard", "/orders-panel", "/order-panel")
 
 
 def _sign_session(message: str) -> str:
@@ -111,7 +111,7 @@ def _login_url_for(request: Request) -> str:
 
 def _wants_html(request: Request) -> bool:
     accept = request.headers.get("accept", "")
-    return "text/html" in accept or request.url.path in ("/dashboard", "/orders-panel")
+    return "text/html" in accept or request.url.path in ("/dashboard", "/orders-panel", "/order-panel")
 
 
 def approval_delay_minutes(now: datetime | None = None) -> int:
@@ -140,7 +140,7 @@ async def require_admin_login(request: Request, call_next):
     return await call_next(request)
 
 
-def _login_html(error: str = "", next_url: str = "/orders-panel") -> str:
+def _login_html(error: str = "", next_url: str = "/dashboard") -> str:
     error_html = f'<div class="error">{error}</div>' if error else ""
     safe_next = html.escape(next_url, quote=True)
     return f"""<!DOCTYPE html>
@@ -148,7 +148,7 @@ def _login_html(error: str = "", next_url: str = "/orders-panel") -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Login - Tiny Integrator</title>
+<title>Login - RJ-Sync</title>
 <style>
 *{{box-sizing:border-box}}body{{margin:0;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#eef2f7;color:#172033;display:grid;place-items:center;padding:24px}}
 .login{{width:100%;max-width:380px;background:#fff;border:1px solid #d8e0ea;border-radius:8px;padding:28px;box-shadow:0 20px 60px rgba(31,41,55,.12)}}
@@ -160,7 +160,7 @@ button{{width:100%;height:42px;margin-top:18px;border:0;border-radius:6px;backgr
 </head>
 <body>
 <main class="login">
-  <h1>Tiny Integrator</h1>
+  <h1>RJ-Sync</h1>
   <p>Acesso administrativo</p>
   {error_html}
   <form method="post" action="/login">
@@ -177,7 +177,7 @@ button{{width:100%;height:42px;margin-top:18px;border:0;border-radius:6px;backgr
 
 
 @app.get("/login")
-async def login_page(next: str = "/orders-panel"):
+async def login_page(next: str = "/dashboard"):
     return HTMLResponse(_login_html(next_url=next), headers={"Cache-Control": "no-cache"})
 
 
@@ -187,9 +187,9 @@ async def login_submit(request: Request):
     form = urllib.parse.parse_qs(body)
     username = form.get("username", [""])[0]
     password = form.get("password", [""])[0]
-    next_url = form.get("next", ["/orders-panel"])[0] or "/orders-panel"
+    next_url = form.get("next", ["/dashboard"])[0] or "/dashboard"
     if not next_url.startswith("/"):
-        next_url = "/orders-panel"
+        next_url = "/dashboard"
     if hmac.compare_digest(username, ADMIN_USERNAME) and hmac.compare_digest(password, ADMIN_PASSWORD):
         response = RedirectResponse(next_url, status_code=303)
         secure_cookie = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
@@ -214,7 +214,7 @@ async def logout():
 
 @app.get("/")
 async def root():
-    return {"status": "ok"}
+    return RedirectResponse("/dashboard", status_code=303)
 
 
 # Threshold: worker deve pulsar dentro dessa janela. Além disso = considerar travado.
@@ -793,6 +793,29 @@ def _parse_order_date(value) -> datetime | None:
         return None
 
 
+def _dashboard_period(preset: str = "last_30", start: str | None = None, end: str | None = None) -> tuple[datetime, datetime, str]:
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    preset = (preset or "last_30").strip()
+    if preset == "custom" and start and end:
+        start_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
+        end_dt = datetime.fromisoformat(end).replace(tzinfo=timezone.utc) + timedelta(days=1)
+        return start_dt, end_dt, f"{start_dt:%d/%m/%Y} a {(end_dt - timedelta(days=1)):%d/%m/%Y}"
+    if preset == "last_7":
+        start_dt = datetime.combine(today - timedelta(days=7), datetime.min.time(), tzinfo=timezone.utc)
+        return start_dt, now, "Últimos 7 dias"
+    if preset == "this_month":
+        start_dt = datetime(today.year, today.month, 1, tzinfo=timezone.utc)
+        return start_dt, now, "Este mês"
+    if preset == "previous_month":
+        first_this_month = datetime(today.year, today.month, 1, tzinfo=timezone.utc)
+        last_previous = first_this_month - timedelta(days=1)
+        start_dt = datetime(last_previous.year, last_previous.month, 1, tzinfo=timezone.utc)
+        return start_dt, first_this_month, "Mês anterior"
+    start_dt = datetime.combine(today - timedelta(days=30), datetime.min.time(), tzinfo=timezone.utc)
+    return start_dt, now, "Últimos 30 dias"
+
+
 def _money_value(value):
     if value in (None, ""):
         return None
@@ -1168,6 +1191,166 @@ def _diff_orders(origin: dict, destination: dict) -> list[dict]:
 @app.get("/orders-panel")
 async def orders_panel():
     return FileResponse("app/static/orders_panel.html")
+
+
+@app.get("/order-panel")
+async def order_panel_alias():
+    return FileResponse("app/static/orders_panel.html")
+
+
+@app.get("/admin/orders-panel/summary")
+async def admin_orders_panel_summary(
+    period: str = "last_30",
+    start: str | None = None,
+    end: str | None = None,
+):
+    from app.db import get_pool
+
+    start_dt, end_dt, period_label = _dashboard_period(period, start, end)
+    p = await get_pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchrow("""
+            WITH origin_base AS (
+                SELECT so.venda_a_id::text AS venda_a_id,
+                       COALESCE(so.fetched_payload, '{}'::jsonb) || COALESCE(so.webhook_payload, '{}'::jsonb) AS payload
+                FROM public.orders_a_snapshot so
+                LEFT JOIN public.orders_map om ON om.venda_a_id::text = so.venda_a_id::text
+                WHERE om.venda_a_id IS NULL
+                  AND so.updated_at >= $1
+                  AND so.updated_at < $2
+            ),
+            failed_create AS (
+                SELECT DISTINCT COALESCE(payload::jsonb->>'venda_a_id', payload::jsonb->>'venda_id') AS venda_a_id
+                FROM public.jobs
+                WHERE job_type = 'create_order_c'
+                  AND status IN ('failed', 'dead', 'waiting_sku')
+                  AND COALESCE(payload::jsonb->>'venda_a_id', payload::jsonb->>'venda_id') IS NOT NULL
+            ),
+            origin_class AS (
+                SELECT ob.venda_a_id,
+                       CASE
+                           WHEN (ob.payload->>'situacao') ~ '^[0-9]+$' THEN
+                               CASE (ob.payload->>'situacao')::int
+                                   WHEN 0 THEN 'em_aberto'
+                                   WHEN 1 THEN 'faturado'
+                                   WHEN 2 THEN 'cancelado'
+                                   WHEN 3 THEN 'aprovado'
+                                   WHEN 4 THEN 'preparando_envio'
+                                   WHEN 5 THEN 'enviado'
+                                   WHEN 6 THEN 'entregue'
+                                   WHEN 7 THEN 'pronto_envio'
+                                   WHEN 8 THEN 'dados_incompletos'
+                                   WHEN 9 THEN 'nao_entregue'
+                                   ELSE ob.payload->>'situacao'
+                               END
+                           ELSE lower(replace(coalesce(ob.payload->>'situacao', ''), ' ', '_'))
+                       END AS status_norm,
+                       lower(coalesce(
+                           ob.payload #>> '{formaEnvio,nome}',
+                           ob.payload #>> '{transportador,formaEnvio,nome}',
+                           ob.payload #>> '{transportador,nome}',
+                           ''
+                       )) AS forma_envio,
+                       nullif(ob.payload #>> '{cliente,nome}', '') AS cliente_nome,
+                       nullif(ob.payload #>> '{cliente,cpfCnpj}', '') AS cliente_cpf,
+                       fc.venda_a_id IS NOT NULL AS failed_create
+                FROM origin_base ob
+                LEFT JOIN failed_create fc ON fc.venda_a_id = ob.venda_a_id
+            ),
+            origin_counts AS (
+                SELECT
+                    COUNT(*) FILTER (
+                        WHERE status_norm IN ('em_aberto', 'aprovado')
+                          AND forma_envio NOT IN ('mercado envios', 'tiktok shipping')
+                          AND cliente_nome IS NOT NULL
+                          AND cliente_cpf IS NOT NULL
+                          AND NOT failed_create
+                    )::int AS scheduled_export,
+                    COUNT(*) FILTER (
+                        WHERE status_norm IN ('em_aberto', 'aprovado')
+                          AND forma_envio NOT IN ('mercado envios', 'tiktok shipping')
+                          AND (cliente_nome IS NULL OR cliente_cpf IS NULL OR failed_create)
+                    )::int AS needs_adjustment,
+                    COUNT(*) FILTER (
+                        WHERE forma_envio IN ('mercado envios', 'tiktok shipping')
+                           OR (status_norm <> '' AND status_norm NOT IN ('em_aberto', 'aprovado'))
+                    )::int AS do_not_export
+                FROM origin_class
+            ),
+            synced_pairs AS (
+                SELECT COALESCE(oas.fetched_payload, '{}'::jsonb) || COALESCE(oas.webhook_payload, '{}'::jsonb) AS a_payload,
+                       COALESCE(ocs.fetched_payload, '{}'::jsonb) AS c_payload
+                FROM public.orders_map om
+                LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
+                LEFT JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = om.venda_c_id::text
+                WHERE om.venda_c_id IS NOT NULL
+                  AND om.updated_at >= $1
+                  AND om.updated_at < $2
+            ),
+            synced_normalized AS (
+                SELECT a_payload, c_payload,
+                       CASE
+                           WHEN (a_payload->>'situacao') ~ '^[0-9]+$' THEN
+                               CASE (a_payload->>'situacao')::int
+                                   WHEN 0 THEN 'em_aberto' WHEN 1 THEN 'faturado' WHEN 2 THEN 'cancelado'
+                                   WHEN 3 THEN 'aprovado' WHEN 4 THEN 'preparando_envio' WHEN 5 THEN 'enviado'
+                                   WHEN 6 THEN 'entregue' WHEN 7 THEN 'pronto_envio' WHEN 8 THEN 'dados_incompletos'
+                                   WHEN 9 THEN 'nao_entregue' ELSE a_payload->>'situacao'
+                               END
+                           ELSE lower(replace(coalesce(a_payload->>'situacao', ''), ' ', '_'))
+                       END AS a_status,
+                       CASE
+                           WHEN (c_payload->>'situacao') ~ '^[0-9]+$' THEN
+                               CASE (c_payload->>'situacao')::int
+                                   WHEN 0 THEN 'em_aberto' WHEN 1 THEN 'faturado' WHEN 2 THEN 'cancelado'
+                                   WHEN 3 THEN 'aprovado' WHEN 4 THEN 'preparando_envio' WHEN 5 THEN 'enviado'
+                                   WHEN 6 THEN 'entregue' WHEN 7 THEN 'pronto_envio' WHEN 8 THEN 'dados_incompletos'
+                                   WHEN 9 THEN 'nao_entregue' ELSE c_payload->>'situacao'
+                               END
+                           ELSE lower(replace(coalesce(c_payload->>'situacao', ''), ' ', '_'))
+                       END AS c_status
+                FROM synced_pairs
+                WHERE c_payload <> '{}'::jsonb
+            ),
+            divergence_counts AS (
+                SELECT COUNT(*)::int AS divergent
+                FROM synced_normalized
+                WHERE lower(coalesce(a_payload #>> '{cliente,cpfCnpj}', '')) <> lower(coalesce(c_payload #>> '{cliente,cpfCnpj}', ''))
+                   OR a_status <> c_status
+                   OR lower(coalesce(a_payload #>> '{enderecoEntrega,cep}', '')) <> lower(coalesce(c_payload #>> '{enderecoEntrega,cep}', ''))
+                   OR lower(coalesce(a_payload #>> '{enderecoEntrega,uf}', '')) <> lower(coalesce(c_payload #>> '{enderecoEntrega,uf}', ''))
+                   OR lower(coalesce(a_payload #>> '{enderecoEntrega,municipio}', a_payload #>> '{enderecoEntrega,cidade}', '')) <> lower(coalesce(c_payload #>> '{enderecoEntrega,municipio}', c_payload #>> '{enderecoEntrega,cidade}', ''))
+                   OR lower(coalesce(a_payload #>> '{ecommerce,numeroPedidoEcommerce}', '')) <> lower(coalesce(c_payload ->> 'numeroOrdemCompra', ''))
+            )
+            SELECT
+                (SELECT COUNT(*)::int FROM public.jobs WHERE job_type = 'create_order_c' AND status = 'done' AND updated_at >= $1 AND updated_at < $2) AS export_completed,
+                (SELECT scheduled_export FROM origin_counts) AS scheduled_export,
+                (SELECT needs_adjustment FROM origin_counts) AS needs_adjustment,
+                (SELECT do_not_export FROM origin_counts) AS do_not_export,
+                (SELECT COUNT(*)::int FROM public.orders_map WHERE venda_c_id IS NOT NULL AND updated_at >= $1 AND updated_at < $2) AS synced,
+                (SELECT COUNT(*)::int FROM public.jobs WHERE status IN ('failed', 'dead', 'waiting_sku', 'skipped_not_mapped') AND updated_at >= $1 AND updated_at < $2) AS sync_errors,
+                (SELECT divergent FROM divergence_counts) AS divergent,
+                (SELECT COUNT(*)::int FROM public.cancelled_order_reviews WHERE status = 'pending' AND updated_at >= $1 AND updated_at < $2) AS cancelled_pending
+        """, start_dt, end_dt)
+
+    return {
+        "period": {
+            "key": period,
+            "label": period_label,
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+        },
+        "cards": {
+            "export_completed": int(row["export_completed"] or 0),
+            "scheduled_export": int(row["scheduled_export"] or 0),
+            "needs_adjustment": int(row["needs_adjustment"] or 0),
+            "do_not_export": int(row["do_not_export"] or 0),
+            "synced": int(row["synced"] or 0),
+            "sync_errors": int(row["sync_errors"] or 0),
+            "divergent": int(row["divergent"] or 0),
+            "cancelled_pending": int(row["cancelled_pending"] or 0),
+        },
+    }
 
 
 @app.get("/admin/orders-panel/data")

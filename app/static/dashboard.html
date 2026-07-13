@@ -3,616 +3,130 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Tiny Integrator - Painel</title>
+<title>RJ-Sync</title>
 <style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f5f7fa;color:#333;min-height:100vh}
-.header{background:#1a1a2e;color:#fff;padding:16px 24px;display:flex;align-items:center;justify-content:space-between}
-.header h1{font-size:18px;font-weight:600}
-.header .meta{font-size:12px;opacity:.7;display:flex;gap:16px;align-items:center}
-.refresh-btn{background:#3a3a5e;border:none;color:#fff;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:6px;transition:background .2s}
-.refresh-btn:hover{background:#4a4a7e}
-.refresh-btn.loading{opacity:.6;pointer-events:none}
-.container{max-width:960px;margin:0 auto;padding:20px}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:24px}
-.stat{background:#fff;border-radius:10px;padding:16px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.08)}
-.stat .value{font-size:28px;font-weight:700;color:#1a1a2e}
-.stat .label{font-size:12px;color:#888;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
-.stat.green .value{color:#22c55e}
-.stat.red .value{color:#ef4444}
-.stat.yellow .value{color:#f59e0b}
-.stat.blue .value{color:#3b82f6}
-.section{background:#fff;border-radius:10px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
-.section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px}
-.section-header h2{font-size:15px;font-weight:600;color:#1a1a2e;display:flex;align-items:center;gap:8px;margin:0}
-.section-header h2 .icon{font-size:18px}
-.section-filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.filter-select{font-size:12px;padding:4px 8px;border:1px solid #ddd;border-radius:6px;background:#f8f9fb;color:#555;cursor:pointer;outline:none}
-.filter-select:focus{border-color:#3b82f6}
-.flags-grid{display:grid;gap:10px}
-.flag-row{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:#f8f9fb;border-radius:8px;transition:background .2s}
-.flag-row:hover{background:#eef1f6}
-.flag-info{flex:1}
-.flag-label{font-size:14px;font-weight:500}
-.flag-desc{font-size:12px;color:#888;margin-top:2px}
-.flag-status{font-size:11px;padding:2px 8px;border-radius:4px;margin-left:8px}
-.flag-status.not-ready{background:#fef2f2;color:#dc2626}
-.toggle{position:relative;width:44px;height:24px;flex-shrink:0;margin-left:12px}
-.toggle input{opacity:0;width:0;height:0}
-.toggle .slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#ccc;border-radius:24px;transition:.3s}
-.toggle .slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s}
-.toggle input:checked+.slider{background:#22c55e}
-.toggle input:checked+.slider:before{transform:translateX(20px)}
-.toggle input:disabled+.slider{background:#e5e5e5;cursor:not-allowed;opacity:.5}
-.toggle input:disabled:checked+.slider{background:#86efac}
-.events-list{display:grid;gap:6px}
-.ev-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;background:#f8f9fb;border-radius:8px}
-.tag{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:500}
-.tag-a{background:#dbeafe;color:#1d4ed8}
-.tag-b{background:#fef3c7;color:#92400e}
-.tag-vendas{background:#e0e7ff;color:#3730a3}
-.tag-notas{background:#fce7f3;color:#9d174d}
-.tag-enviados{background:#d1fae5;color:#065f46}
-.ev-time{font-size:12px;color:#888}
-.ev-detail{font-size:13px;color:#555}
-.ev-spacer{flex:1}
-.ev-action{font-size:10px;padding:2px 8px;border-radius:4px;font-weight:500;white-space:nowrap;flex-shrink:0}
-.ev-action.act-job{background:#d1fae5;color:#065f46}
-.ev-action.act-echo{background:#fef3c7;color:#92400e}
-.ev-action.act-noop{background:#f3f4f6;color:#9ca3af}
-.jobs-table{width:100%;border-collapse:collapse;font-size:13px}
-.jobs-table th{text-align:left;padding:8px 10px;border-bottom:2px solid #eee;color:#888;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
-.jobs-table td{padding:8px 10px;border-bottom:1px solid #f3f4f6;vertical-align:top}
-.jobs-table tr:hover td{background:#f8f9fb}
-.status-badge{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:500;white-space:nowrap}
-.status-done{background:#d1fae5;color:#065f46}
-.status-queued{background:#dbeafe;color:#1d4ed8}
-.status-running{background:#fef3c7;color:#92400e}
-.status-failed{background:#fef2f2;color:#dc2626}
-.status-dead{background:#fce7f3;color:#9d174d}
-.status-skipped_not_mapped{background:#f3f4f6;color:#9ca3af}
-.status-waiting_sku{background:#fff7ed;color:#ea580c}
-.job-type{font-family:monospace;font-size:12px;color:#555}
-.job-preview{font-size:11px;color:#888;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.job-error{font-size:11px;color:#dc2626;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.jobs-table tbody tr.job-row{cursor:pointer}
-.job-detail-row td{background:#f0f4f8;padding:10px 14px !important;border-bottom:1px solid #e2e8f0}
-.job-detail-row pre{margin:0;font-size:11px;font-family:monospace;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;color:#334155;line-height:1.5}
-.job-detail-row .detail-label{font-size:11px;font-weight:600;color:#64748b;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px}
-.auto-refresh{font-size:11px;color:#888;display:flex;align-items:center;gap:4px}
-.auto-refresh .dot{width:6px;height:6px;border-radius:50%;background:#22c55e;display:inline-block}
-.empty-state{text-align:center;padding:24px;color:#aaa;font-size:14px}
-.auth-bar{display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap}
-.auth-card{flex:1;min-width:200px;border-radius:10px;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 1px 3px rgba(0,0,0,.08)}
-.auth-card.ok{background:#f0fdf4;border:1px solid #bbf7d0}
-.auth-card.expired{background:#fef2f2;border:1px solid #fecaca}
-.auth-card.missing{background:#f5f5f5;border:1px solid #e5e5e5}
-.auth-card .auth-left{display:flex;align-items:center;gap:10px}
-.auth-card .auth-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
-.auth-card.ok .auth-dot{background:#22c55e}
-.auth-card.expired .auth-dot{background:#ef4444}
-.auth-card.missing .auth-dot{background:#aaa}
-.auth-card .auth-name{font-size:14px;font-weight:600;color:#333}
-.auth-card .auth-detail{font-size:11px;color:#888;margin-top:2px}
-.auth-card .auth-link{font-size:12px;font-weight:500;padding:5px 12px;border-radius:6px;text-decoration:none;white-space:nowrap;transition:background .2s}
-.auth-card.ok .auth-link{background:#dcfce7;color:#166534}
-.auth-card.ok .auth-link:hover{background:#bbf7d0}
-.auth-card.expired .auth-link{background:#ef4444;color:#fff}
-.auth-card.expired .auth-link:hover{background:#dc2626}
-.auth-card.missing .auth-link{background:#3b82f6;color:#fff}
-.auth-card.missing .auth-link:hover{background:#2563eb}
-@media(max-width:600px){.container{padding:12px}.stats{grid-template-columns:repeat(2,1fr)}.header{flex-direction:column;gap:8px;text-align:center}.jobs-table{font-size:11px}.auth-bar{flex-direction:column}.section-header{flex-direction:column;align-items:flex-start}}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f4f6f8;color:#172033}
+.topbar{min-height:62px;background:#172033;color:#fff;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 22px;border-bottom:1px solid #0f172a}
+.brand{display:flex;align-items:baseline;gap:12px}.brand h1{margin:0;font-size:18px;font-weight:800}.brand span{font-size:12px;color:#9fb0c5}
+.nav{display:flex;align-items:center;gap:10px}.nav a,.nav button{border:0;background:#26364a;color:#dbe7f5;border-radius:6px;padding:8px 11px;text-decoration:none;font-size:13px;cursor:pointer}.nav a:hover,.nav button:hover{background:#334a65;color:#fff}
+.auth-mini{display:flex;align-items:center;gap:8px;flex:1;justify-content:center;min-width:0}.auth-mini-card{display:flex;align-items:center;gap:7px;min-width:155px;max-width:230px;height:34px;border:1px solid rgba(255,255,255,.16);background:#26364a;border-radius:7px;padding:0 8px;color:#dbe7f5}.auth-mini-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}.auth-mini-card.ok .auth-mini-dot{background:#22c55e}.auth-mini-card.expired .auth-mini-dot{background:#ef4444}.auth-mini-card.missing .auth-mini-dot{background:#94a3b8}.auth-mini-text{min-width:0;flex:1}.auth-mini-name{font-size:11px;font-weight:800;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.auth-mini-detail{font-size:10px;color:#aebdd0;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.auth-mini-link{border:0;background:#334a65;color:#fff;border-radius:5px;padding:5px 7px;text-decoration:none;font-size:10px;font-weight:800;white-space:nowrap}.auth-mini-link:hover{background:#3f5877}
+.wrap{max-width:1180px;margin:0 auto;padding:18px}.period{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.period-title{display:flex;align-items:center;gap:8px;color:#536274;font-size:13px;font-weight:800}.period-pill{height:34px;border:1px solid #9cc5ff;background:#eaf2ff;color:#17437a;border-radius:6px;padding:0 11px;font-size:13px;font-weight:800;cursor:pointer}.period-controls{display:none;grid-template-columns:repeat(5,minmax(110px,auto));gap:8px;align-items:end;background:#fff;border:1px solid #d9e1ea;border-radius:8px;padding:10px;margin-bottom:14px}.period-controls.open{display:grid}.period-controls button,.period-controls input{height:36px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#26364a;padding:0 10px;font-size:13px;font-weight:700}.period-controls button{cursor:pointer}.period-controls button.active{background:#1f3a5f;color:#fff;border-color:#1f3a5f}.period-controls label{display:grid;gap:4px;font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase}
+.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:12px}.metric{border:1px solid #d9e1ea;border-radius:8px;padding:14px;min-height:104px;display:flex;flex-direction:column;justify-content:space-between}.metric .value{font-size:29px;font-weight:850;color:#172033}.metric .label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#334155;margin-top:4px;line-height:1.25}.metric.blue{background:#cfe3ff;border-color:#7fb2ff}.metric.green{background:#c8f0d6;border-color:#75d994}.metric.orange{background:#ffe0b3;border-color:#ffb75d}.metric.gray{background:#dde5ef;border-color:#acb8c8}.metric.red{background:#ffd1d1;border-color:#ff8a8a}.metric.purple{background:#ded2ff;border-color:#ad93ff}.metric.teal{background:#c5f0e9;border-color:#67d4c7}.metric button{align-self:flex-start;margin-top:10px;height:28px;border:1px solid rgba(15,23,42,.12);background:#fff;border-radius:6px;padding:0 10px;font-size:12px;font-weight:800;color:#26364a;cursor:pointer}.metric button:hover{background:#f8fafc}
+.hint{margin-top:14px;color:#64748b;font-size:12px}.empty{background:#fff;border:1px solid #d9e1ea;border-radius:8px;padding:28px;text-align:center;color:#7a899a}.loading{opacity:.55;pointer-events:none}
+@media(max-width:820px){.topbar{align-items:flex-start;flex-direction:column}.auth-mini{width:100%;justify-content:flex-start;flex-wrap:wrap}.period{align-items:flex-start;flex-direction:column}.period-controls{grid-template-columns:1fr 1fr}.summary-grid{grid-template-columns:repeat(2,1fr)}.wrap{padding:12px}}
 </style>
 </head>
 <body>
-<div class="header">
-  <div>
-    <h1 style="margin:0">Tiny Integrator</h1>
-    <span id="buildTime" style="font-size:11px;font-weight:300;color:#64748b"></span>
-  </div>
-  <div class="meta">
-    <span class="auto-refresh"><span class="dot" id="autoRefreshDot"></span> Auto-refresh 1min</span>
-    <button class="refresh-btn" onclick="refresh()" id="refreshBtn">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
-      Atualizar
-    </button>
-  </div>
-</div>
-<div class="container">
-  <div class="auth-bar" id="authBar">
-    <div class="auth-card missing"><div class="auth-left"><div class="auth-dot"></div><div><div class="auth-name">Carregando...</div></div></div></div>
-  </div>
-
-  <div class="stats" id="statsGrid"></div>
-
-  <div class="section">
-    <div class="section-header" style="cursor:pointer;user-select:none" onclick="toggleControles()">
-      <h2><span class="icon">&#9881;</span> Controles <span id="controlesSummary" style="font-size:13px;font-weight:400;color:#888;margin-left:6px"></span></h2>
-      <span id="controlesChevron" style="font-size:18px;color:#888;transition:transform .2s">&#9660;</span>
-    </div>
-    <div class="flags-grid" id="flagsGrid" style="display:none">
-      <div class="empty-state">Carregando...</div>
-    </div>
-  </div>
-
-  <div class="section">
-    <div class="section-header">
-      <h2><span class="icon">&#128232;</span> Ultimos Webhooks</h2>
-      <div class="section-filters">
-        <select class="filter-select" id="eventsLimit" onchange="loadEvents()">
-          <option value="5" selected>5</option>
-          <option value="10">10</option>
-          <option value="25">25</option>
-          <option value="50">50</option>
-        </select>
-      </div>
-    </div>
-    <div class="events-list" id="eventsList">
-      <div class="empty-state">Carregando...</div>
-    </div>
-  </div>
-
-  <div class="section">
-    <div class="section-header">
-      <h2><span class="icon">&#128203;</span> Ultimos Jobs</h2>
-      <div class="section-filters">
-        <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:4px;cursor:pointer">
-          <input type="checkbox" id="hideNotMapped" checked onchange="loadJobs()" style="cursor:pointer">
-          Ocultar sem par
-        </label>
-        <select class="filter-select" id="jobsLimit" onchange="loadJobs()">
-          <option value="5">5</option>
-          <option value="10" selected>10</option>
-          <option value="25">25</option>
-          <option value="50">50</option>
-        </select>
-        <select class="filter-select" id="jobsStatus" onchange="loadJobs()">
-          <option value="" selected>Status: Todos</option>
-          <option value="queued">queued</option>
-          <option value="running">running</option>
-          <option value="done">done</option>
-          <option value="failed">failed</option>
-          <option value="dead">dead</option>
-          <option value="skipped_not_mapped">not_mapped</option>
-          <option value="waiting_sku">waiting_sku</option>
-        </select>
-        <select class="filter-select" id="jobsType" onchange="loadJobs()">
-          <option value="">Tipo: Todos</option>
-          <option value="fetch_order_a">fetch_order_a</option>
-          <option value="create_order_c">create_order_c</option>
-          <option value="sync_status">sync_status</option>
-          <option value="sync_nf_link">sync_nf_link</option>
-          <option value="sync_tracking_c_to_a">sync_tracking_c_to_a</option>
-          <option value="update_numero_compra">update_numero_compra</option>
-          <option value="noop">noop</option>
-        </select>
-      </div>
-    </div>
-    <div style="overflow-x:auto">
-      <table class="jobs-table" id="jobsTable">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Tipo</th>
-            <th>Status</th>
-            <th>Detalhe</th>
-            <th>Quando</th>
-          </tr>
-        </thead>
-        <tbody id="jobsBody">
-          <tr><td colspan="5" class="empty-state">Carregando...</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-</div>
-
+<header class="topbar">
+  <div class="brand"><h1>RJ-Sync</h1><span>Gestão de pedidos Tiny</span></div>
+  <div class="auth-mini" id="authMini"></div>
+  <nav class="nav">
+    <a href="/orders-panel">Painel completo</a>
+    <button id="refreshBtn">Atualizar</button>
+    <a href="/logout">Sair</a>
+  </nav>
+</header>
+<main class="wrap">
+  <section class="period">
+    <div class="period-title"><span>Período analisado</span><button class="period-pill" id="periodToggle">Últimos 30 dias</button></div>
+  </section>
+  <section class="period-controls" id="periodControls">
+    <button data-period="last_7">Últimos 7 dias</button>
+    <button data-period="last_30" class="active">Últimos 30 dias</button>
+    <button data-period="this_month">Este mês</button>
+    <button data-period="previous_month">Mês anterior</button>
+    <button data-period="custom">Personalizado</button>
+    <label>Início<input id="customStart" type="date"></label>
+    <label>Fim<input id="customEnd" type="date"></label>
+  </section>
+  <section class="summary-grid" id="summary"></section>
+  <div class="hint">A dashboard inicial carrega apenas somatórios. As listagens ficam no Painel completo.</div>
+</main>
 <script>
-const API = '';
-let autoRefreshTimer;
+const state={period:'last_30',start:'',end:'',auth:{tokens:[],health:{}}};
+const $=id=>document.getElementById(id);
+const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 
-function timeAgo(dateStr) {
-  if (!dateStr) return '-';
-  const d = new Date(dateStr);
-  const now = new Date();
-  const diff = Math.floor((now - d) / 1000);
-  if (diff < 60) return diff + 's atras';
-  if (diff < 3600) return Math.floor(diff/60) + 'min atras';
-  if (diff < 86400) return Math.floor(diff/3600) + 'h atras';
-  return Math.floor(diff/86400) + 'd atras';
+function card(label,value,tone,actionLabel,href){
+  const action=actionLabel?`<button onclick="location.href='${href}'">${esc(actionLabel)}</button>`:'';
+  return `<div class="metric ${tone}"><div><div class="value">${esc(value)}</div><div class="label">${esc(label)}</div></div>${action}</div>`;
 }
 
-function sourceBadge(source) {
-  return `<span class="tag tag-${(source||'').toLowerCase()}">${source||'?'}</span>`;
+async function loadSummary(){
+  document.body.classList.add('loading');
+  try{
+    const params=new URLSearchParams({period:state.period});
+    if(state.period==='custom'&&state.start&&state.end){params.set('start',state.start);params.set('end',state.end)}
+    const res=await fetch('/admin/orders-panel/summary?'+params.toString());
+    if(res.status===401){location.href='/login?next=/dashboard';return}
+    if(!res.ok)throw new Error('Falha ao carregar resumo: '+res.status);
+    const data=await res.json();
+    $('periodToggle').textContent=data.period.label;
+    const c=data.cards||{};
+    $('summary').innerHTML=[
+      card('Exportações concluídas',c.export_completed,'green'),
+      card('Agendados para exportar',c.scheduled_export,'blue'),
+      card('Precisam de ajuste',c.needs_adjustment,'orange','Atualizar','/orders-panel'),
+      card('Não exportar',c.do_not_export,'gray'),
+      card('Sincronizados',c.synced,'green'),
+      card('Com erro de sincronismo',c.sync_errors,'red','Retentar','/orders-panel'),
+      card('Divergentes',c.divergent,'purple','Sincronizar','/orders-panel'),
+      card('Cancelados para analisar',c.cancelled_pending,'teal')
+    ].join('');
+  }catch(err){
+    $('summary').innerHTML=`<div class="empty">${esc(err.message||err)}</div>`;
+  }finally{
+    document.body.classList.remove('loading');
+  }
 }
 
-function topicBadge(topic) {
-  const cls = {'vendas':'tag-vendas','notas':'tag-notas','enviados':'tag-enviados','notas_fiscais':'tag-notas'}[topic] || 'tag-vendas';
-  return `<span class="tag ${cls}">${topic||'?'}</span>`;
-}
-
-function statusBadge(status) {
-  const labels = {'skipped_not_mapped': 'not_mapped', 'waiting_sku': 'aguardando SKU'};
-  const label = labels[status] || status;
-  return `<span class="status-badge status-${status}">${label}</span>`;
-}
-
-function actionBadge(action_result) {
-  if (!action_result) return '';
-  if (action_result === 'echo') return '<span class="ev-action act-echo">Eco</span>';
-  if (action_result === 'noop:no_orders_map') return '<span class="ev-action act-noop" title="Pedido sem mapeamento A\u2194C">Sem par</span>';
-  if (action_result === 'noop') return '<span class="ev-action act-noop">Ignorado</span>';
-  if (action_result.startsWith('job:')) {
-    const jt = action_result.replace('job:', '');
-    const labels = {
-      'fetch_order_a': 'Buscar A',
-      'create_order_c': 'Criar C',
-      'sync_status': 'Sync Status',
-      'sync_nf_link': 'Sync NF',
-      'sync_tracking_c_to_a': 'Sync Rastreio',
-      'update_numero_compra': 'Atualizar nº Compra',
-    };
-    return `<span class="ev-action act-job">\u2192 ${labels[jt] || jt}</span>`;
-  }
-  return `<span class="ev-action act-noop">${escHtml(action_result)}</span>`;
-}
-
-function previewText(job) {
-  if (job.last_error && (job.status === 'failed' || job.status === 'dead')) {
-    return `<span class="job-error" title="${escHtml(job.last_error)}">${escHtml(truncate(job.last_error, 60))}</span>`;
-  }
-  if (job.action_preview) {
-    let ap = job.action_preview;
-    if (typeof ap === 'string') { try { ap = JSON.parse(ap); } catch(e) { return `<span class="job-preview">${escHtml(truncate(ap, 50))}</span>`; } }
-    if (job.job_type === 'noop' && ap.would === 'noop') return '<span class="job-preview" title="Pedido sem mapeamento A\u2194C" style="color:#9ca3af">Sem par</span>';
-    if (ap.missing_skus && job.status === 'waiting_sku') {
-      const skus = ap.missing_skus.map(s => s.sku).join(', ');
-      return `<span class="job-preview" style="color:#ea580c" title="SKUs faltando: ${escHtml(skus)}">SKU: ${escHtml(truncate(skus, 40))}</span>`;
-    }
-    if (ap.skipped) return `<span class="job-preview" title="${escHtml(ap.reason||'')}">${escHtml(ap.reason||'skipped')}</span>`;
-    if (ap.dry_run) return `<span class="job-preview">dry-run</span>`;
-    if (ap.done || ap.created) {
-      const parts = [];
-      if (ap.venda_c_id) parts.push('C:' + ap.venda_c_id);
-      if (ap.target_venda_id) parts.push(ap.target_source + ':' + ap.target_venda_id);
-      return `<span class="job-preview" style="color:#065f46">${parts.join(' ') || 'ok'}</span>`;
-    }
-    return `<span class="job-preview">${escHtml(truncate(JSON.stringify(ap), 50))}</span>`;
-  }
-  return '<span class="job-preview">-</span>';
-}
-
-function escHtml(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
-function truncate(s, n) { return s && s.length > n ? s.substring(0, n) + '...' : s || ''; }
-
-function toggleJobDetail(row, idx) {
-  const next = row.nextElementSibling;
-  if (next && next.classList.contains('job-detail-row')) {
-    next.remove();
-    return;
-  }
-  const j = (window._lastJobs || [])[idx];
-  if (!j) return;
-  const parts = [];
-  if (j.action_preview) {
-    let apObj = j.action_preview;
-    if (typeof apObj === 'string') { try { apObj = JSON.parse(apObj); } catch(e) { apObj = null; parts.push('<div class="detail-label">Detalhe</div><pre>' + escHtml(j.action_preview) + '</pre>'); } }
-    if (apObj && typeof apObj === 'object') {
-      let payloadC = apObj.payload_sent_to_c;
-      let summary = Object.assign({}, apObj);
-      delete summary.payload_sent_to_c;
-      parts.push('<div class="detail-label">Detalhe</div><pre>' + escHtml(JSON.stringify(summary, null, 2)) + '</pre>');
-      if (payloadC) {
-        parts.push('<div class="detail-label" style="margin-top:8px;color:#38bdf8">Payload enviado a C</div><pre style="border-left:3px solid #38bdf8;padding-left:10px">' + escHtml(JSON.stringify(payloadC, null, 2)) + '</pre>');
-      }
-    }
-  }
-  if (j.last_error) {
-    parts.push('<div class="detail-label" style="margin-top:8px">Erro</div><pre style="color:#dc2626">' + escHtml(j.last_error) + '</pre>');
-  }
-  if (j.payload) {
-    const pl = typeof j.payload === 'string' ? j.payload : JSON.stringify(j.payload, null, 2);
-    let formatted;
-    try { formatted = JSON.stringify(JSON.parse(pl), null, 2); } catch(e) { formatted = pl; }
-    parts.push('<div class="detail-label" style="margin-top:8px">Payload</div><pre>' + escHtml(formatted) + '</pre>');
-  }
-  if (parts.length === 0) parts.push('<pre style="color:#aaa">Sem detalhes</pre>');
-  const detail = document.createElement('tr');
-  detail.className = 'job-detail-row';
-  detail.innerHTML = '<td colspan="5">' + parts.join('') + '</td>';
-  row.after(detail);
-}
-
-async function loadAuth() {
-  try {
-    const [tokensRes, healthRes] = await Promise.all([
-      fetch(API + '/admin/tokens'),
-      fetch(API + '/admin/tokens/health').catch(() => null)
+async function loadAuth(){
+  try{
+    const [tokensRes,healthRes]=await Promise.all([
+      fetch('/admin/tokens').catch(()=>null),
+      fetch('/admin/tokens/health').catch(()=>null)
     ]);
-    const data = await tokensRes.json();
-    let health = {};
-    if (healthRes && healthRes.ok) {
-      try { health = await healthRes.json(); } catch(e) {}
+    state.auth.tokens=tokensRes&&tokensRes.ok?(await tokensRes.json()).tokens||[]:[];
+    state.auth.health=healthRes&&healthRes.ok?(await healthRes.json()):{};
+    renderAuth();
+  }catch(e){}
+}
+
+function renderAuth(){
+  const bar=$('authMini');
+  const tokens={A:null,B:null};
+  (state.auth.tokens||[]).forEach(t=>tokens[t.account]=t);
+  const labels={A:'Rejuderme',B:'V.365'};
+  const paths={A:'/auth/a/start',B:'/auth/c/start'};
+  bar.innerHTML=['A','B'].map(acc=>{
+    const t=tokens[acc];
+    const h=state.auth.health?.[acc];
+    let cls='missing', status='Sem conexão', detail='Reconectar';
+    if(t){
+      const expires=t.expires_at?new Date(t.expires_at):null;
+      const valid=expires&&expires>new Date();
+      if(!valid){cls='expired';status='Expirado'}
+      else if(h&&h.ok===false){cls='expired';status=h.status_code===401?'Token inválido':'Falha'}
+      else{cls='ok';status='Conectado'}
     }
-    const bar = document.getElementById('authBar');
-    const accounts = {A: null, B: null};
-    (data.tokens || []).forEach(t => { accounts[t.account] = t; });
-    const labels = {A: 'Tiny A (Rejuderme)', B: 'Tiny C (V365)'};
-    const authPaths = {A: '/auth/a/start', B: '/auth/c/start'};
-    bar.innerHTML = ['A','B'].map(acc => {
-      const t = accounts[acc];
-      const h = health[acc];
-      if (!t) {
-        return `<div class="auth-card missing"><div class="auth-left"><div class="auth-dot"></div><div><div class="auth-name">${labels[acc]}</div><div class="auth-detail">Nenhum token cadastrado</div></div></div><a href="${authPaths[acc]}" class="auth-link" target="_blank">Conectar</a></div>`;
-      }
-      const now = new Date();
-      const expires = t.expires_at ? new Date(t.expires_at) : null;
-      const localValid = expires && expires > now;
-      const apiOk = h ? h.ok : null;
-      let cls, statusText, detail;
-      if (!localValid) {
-        cls = 'expired';
-        statusText = 'Expirado';
-        detail = expires ? 'Expirou ' + timeAgo(expires.toISOString()) : 'Token expirado';
-      } else if (apiOk === false) {
-        cls = 'expired';
-        if (h && h.status_code === 401) {
-          statusText = 'Token Inv\u00e1lido';
-          detail = 'API rejeitou o token (401)';
-        } else {
-          statusText = 'Falha na Conex\u00e3o';
-          detail = h && h.error ? h.error : 'N\u00e3o foi poss\u00edvel validar';
-        }
-      } else {
-        cls = 'ok';
-        statusText = 'Conectado';
-        const remaining = Math.floor((expires - now) / 1000);
-        if (remaining < 3600) detail = 'Expira em ' + Math.floor(remaining/60) + 'min';
-        else if (remaining < 86400) detail = 'Expira em ' + Math.floor(remaining/3600) + 'h';
-        else detail = 'Expira em ' + Math.floor(remaining/86400) + 'd';
-      }
-      const linkText = cls === 'ok' ? 'Reconectar' : 'Reconectar agora';
-      return `<div class="auth-card ${cls}"><div class="auth-left"><div class="auth-dot"></div><div><div class="auth-name">${labels[acc]}</div><div class="auth-detail">${statusText} &middot; ${detail}</div></div></div><a href="${authPaths[acc]}" class="auth-link" target="_blank">${linkText}</a></div>`;
-    }).join('');
-  } catch(e) {
-    document.getElementById('authBar').innerHTML = '<div class="auth-card missing"><div class="auth-left"><div class="auth-dot"></div><div><div class="auth-name">Erro ao verificar tokens</div></div></div></div>';
-  }
+    return `<div class="auth-mini-card ${cls}"><span class="auth-mini-dot"></span><div class="auth-mini-text"><div class="auth-mini-name">Tiny ${esc(labels[acc])}</div><div class="auth-mini-detail">${esc(status)}</div></div><a class="auth-mini-link" href="${paths[acc]}" target="_blank">${detail}</a></div>`;
+  }).join('');
 }
 
-let _controlesOpen = false;
-function toggleControles() {
-  _controlesOpen = !_controlesOpen;
-  document.getElementById('flagsGrid').style.display = _controlesOpen ? '' : 'none';
-  document.getElementById('controlesChevron').style.transform = _controlesOpen ? 'rotate(180deg)' : '';
-}
-
-async function loadFlags() {
-  try {
-    const res = await fetch(API + '/admin/flags');
-    const data = await res.json();
-    const grid = document.getElementById('flagsGrid');
-    const summary = document.getElementById('controlesSummary');
-    if (!data.flags || data.flags.length === 0) {
-      grid.innerHTML = '<div class="empty-state">Nenhum controle configurado</div>';
-      summary.textContent = '';
-      return;
-    }
-    const total = data.flags.length;
-    const on = data.flags.filter(f => f.enabled).length;
-    summary.textContent = `(${on}/${total} ligados)`;
-    grid.innerHTML = data.flags.map(f => `
-      <div class="flag-row">
-        <div class="flag-info">
-          <span class="flag-label">${escHtml(f.label || f.key)}</span>
-          ${!f.functional ? '<span class="flag-status not-ready">Em breve</span>' : ''}
-          <div class="flag-desc">${escHtml(f.description || '')}</div>
-        </div>
-        <label class="toggle">
-          <input type="checkbox" ${f.enabled ? 'checked' : ''} ${!f.functional ? 'disabled' : ''}
-                 onchange="toggleFlag('${f.key}', this.checked)">
-          <span class="slider"></span>
-        </label>
-      </div>
-    `).join('');
-  } catch(e) {
-    document.getElementById('flagsGrid').innerHTML = '<div class="empty-state">Erro ao carregar controles</div>';
-  }
-}
-
-async function toggleFlag(key, enabled) {
-  try {
-    await fetch(API + '/admin/flags', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({key, enabled})
-    });
-    const checkboxes = document.querySelectorAll('#flagsGrid .toggle input[type=checkbox]');
-    let on = 0;
-    checkboxes.forEach(cb => { if (cb.checked) on++; });
-    document.getElementById('controlesSummary').textContent = `(${on}/${checkboxes.length} ligados)`;
-  } catch(e) {
-    alert('Erro ao salvar: ' + e.message);
-    loadFlags();
-  }
-}
-
-async function loadEvents() {
-  const limit = document.getElementById('eventsLimit').value;
-  const container = document.getElementById('eventsList');
-  try {
-    const res = await fetch(API + '/admin/events?limit=' + limit);
-    const data = await res.json();
-    if (!data.events || data.events.length === 0) {
-      container.innerHTML = '<div class="empty-state">Nenhum webhook recebido</div>';
-      return;
-    }
-    container.innerHTML = data.events.map(ev => `
-      <div class="ev-row">
-        ${sourceBadge(ev.source)}
-        ${topicBadge(ev.topic)}
-        ${ev.venda_id ? `<span class="ev-detail">Venda #${ev.venda_id}</span>` : ''}
-        ${ev.codigo_situacao ? `<span class="tag">${escHtml(ev.codigo_situacao)}</span>` : ''}
-        ${ev.id_nota_fiscal ? `<span class="ev-detail">NF #${ev.id_nota_fiscal}</span>` : ''}
-        <span class="ev-spacer"></span>
-        <span class="ev-time">${timeAgo(ev.created_at)}</span>
-        ${actionBadge(ev.action_result)}
-      </div>
-    `).join('');
-  } catch(e) {
-    container.innerHTML = '<div class="empty-state">Erro ao carregar webhooks</div>';
-  }
-}
-
-async function loadJobs() {
-  const limit = document.getElementById('jobsLimit').value;
-  const status = document.getElementById('jobsStatus').value;
-  const jobType = document.getElementById('jobsType').value;
-  const hideNotMapped = document.getElementById('hideNotMapped').checked;
-  const tbody = document.getElementById('jobsBody');
-  try {
-    let url = API + '/admin/dashboard?_jobs=1';
-    const params = new URLSearchParams();
-    params.set('limit', limit);
-    if (status) params.set('status', status);
-    if (jobType) params.set('job_type', jobType);
-    if (hideNotMapped && !status) {
-      params.set('exclude_status', 'skipped_not_mapped');
-      params.set('exclude_noop', 'true');
-    }
-    const res = await fetch(API + '/admin/jobs-dashboard?' + params.toString());
-    const data = await res.json();
-    let jobs = data.jobs || [];
-    if (hideNotMapped) {
-      jobs = jobs.filter(j => {
-        if (j.job_type !== 'noop') return true;
-        let ap = j.action_preview;
-        if (typeof ap === 'string') { try { ap = JSON.parse(ap); } catch(e) { return true; } }
-        return !(ap && ap.would === 'noop');
-      });
-    }
-    if (jobs.length > 0) {
-      tbody.innerHTML = jobs.map((j, i) => `
-        <tr class="job-row" onclick="toggleJobDetail(this, ${i})">
-          <td>${j.id}</td>
-          <td><span class="job-type">${j.job_type}</span></td>
-          <td>${statusBadge(j.status)}</td>
-          <td>${previewText(j)}</td>
-          <td style="white-space:nowrap;color:#888;font-size:12px">${timeAgo(j.updated_at || j.created_at)}</td>
-        </tr>
-      `).join('');
-      window._lastJobs = jobs;
-    } else {
-      tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Nenhum job</td></tr>';
-    }
-  } catch(e) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Erro ao carregar jobs</td></tr>';
-  }
-}
-
-async function loadStats() {
-  try {
-    const res = await fetch(API + '/admin/dashboard');
-    const data = await res.json();
-    const sg = document.getElementById('statsGrid');
-    const waitingSku = (data.job_counts||{}).waiting_sku || 0;
-    const trackingSkipped = data.tracking_skipped_recent || 0;
-    // Alerta de worker travado: aparece se sem pulsar há mais de 5 min
-    const workerAge = data.worker_heartbeat_age_seconds;
-    const workerStale = workerAge != null && workerAge > 300;
-    const workerAgeLabel = workerAge == null ? '?' :
-      workerAge < 60 ? Math.round(workerAge) + 's' :
-      workerAge < 3600 ? Math.round(workerAge / 60) + ' min' :
-      Math.round(workerAge / 3600) + ' h';
-    sg.innerHTML = `
-      <div class="stat blue"><div class="value">${data.events_total || 0}</div><div class="label">Webhooks</div></div>
-      <div class="stat green"><div class="value">${data.today_done || 0}</div><div class="label">Hoje OK</div></div>
-      <div class="stat red">
-        <div class="value">${data.today_failed || 0}</div><div class="label">Hoje Erro</div>
-        ${(data.job_counts||{}).failed > 0 ? `<button class="refresh-btn" onclick="retryFailed()" style="margin:8px auto 0;font-size:11px;padding:4px 10px;background:#ef4444;color:#fff">Reprocessar</button>` : ''}
-      </div>
-      <div class="stat yellow"><div class="value">${(data.job_counts||{}).queued || 0}</div><div class="label">Na Fila</div></div>
-      <div class="stat"><div class="value">${data.orders_replicated || 0}</div><div class="label">Replicados</div></div>
-      ${waitingSku > 0 ? `
-      <div class="stat" style="background:#fff7ed;border:1px solid #fed7aa">
-        <div class="value" style="color:#ea580c">${waitingSku}</div>
-        <div class="label" style="color:#9a3412">Aguardando SKU</div>
-        <button class="refresh-btn" onclick="retryWaitingSku()" style="margin:8px auto 0;font-size:11px;padding:4px 10px;background:#ea580c;color:#fff">Reprocessar</button>
-        <a href="https://supabase.com/dashboard/project/wqselbvfnsxebogfycnd/editor?schema=public&table=products_map" target="_blank" style="display:block;font-size:10px;color:#9a3412;margin-top:4px;opacity:.7">Editar produtos</a>
-      </div>` : ''}
-      ${trackingSkipped > 0 ? `
-      <div class="stat" style="background:#eff6ff;border:1px solid #bfdbfe">
-        <div class="value" style="color:#2563eb">${trackingSkipped}</div>
-        <div class="label" style="color:#1e40af">Sem Rastreio</div>
-        <button class="refresh-btn" onclick="retryTrackingSkipped()" style="margin:8px auto 0;font-size:11px;padding:4px 10px;background:#2563eb;color:#fff">Reprocessar</button>
-      </div>` : ''}
-      ${workerStale ? `
-      <div class="stat" style="background:#fef2f2;border:1px solid #fecaca;grid-column:span 2">
-        <div class="value" style="color:#dc2626;font-size:24px">⚠️ Worker instável</div>
-        <div class="label" style="color:#991b1b">Última atividade há ${workerAgeLabel}. Reinicialização automática em andamento.</div>
-      </div>` : ''}
-    `;
-  } catch(e) {
-    document.getElementById('statsGrid').innerHTML = '<div class="stat red"><div class="value">!</div><div class="label">Erro</div></div>';
-  }
-}
-
-async function retryFailed() {
-  if (!confirm('Reprocessar todos os jobs com erro?')) return;
-  try {
-    const res = await fetch(API + '/admin/jobs/retry-failed', {method: 'POST'});
-    const data = await res.json();
-    alert(data.retried + ' job(s) recolocado(s) na fila');
-    refresh();
-  } catch(e) { alert('Erro: ' + e.message); }
-}
-
-async function retryWaitingSku() {
-  if (!confirm('Reprocessar pedidos aguardando SKU?')) return;
-  try {
-    const res = await fetch(API + '/admin/jobs/retry-waiting-sku', {method: 'POST'});
-    const data = await res.json();
-    alert(data.requeued + ' pedido(s) recolocado(s) na fila');
-    refresh();
-  } catch(e) { alert('Erro: ' + e.message); }
-}
-
-async function retryTrackingSkipped() {
-  if (!confirm('Reprocessar TODOS os pedidos sem rastreio?\\n\\nO sistema vai tentar buscar o código de rastreio em C novamente, escalonado em 10 jobs/minuto. Pode levar várias horas dependendo do volume.\\n\\nÉ idempotente: pode rodar várias vezes sem problema.')) return;
-  try {
-    const res = await fetch(API + '/admin/jobs/retry-tracking-skipped', {method: 'POST'});
-    const data = await res.json();
-    alert(data.requeued + ' pedido(s) recolocado(s) na fila. Tempo estimado: ' + data.estimated_duration_minutes + ' min.');
-    refresh();
-  } catch(e) { alert('Erro: ' + e.message); }
-}
-
-async function refresh() {
-  const btn = document.getElementById('refreshBtn');
-  btn.classList.add('loading');
-  btn.textContent = 'Atualizando...';
-  await Promise.all([loadAuth(), loadFlags(), loadStats(), loadEvents(), loadJobs()]);
-  btn.classList.remove('loading');
-  btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg> Atualizar';
-  resetAutoRefresh();
-}
-
-function resetAutoRefresh() {
-  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
-  autoRefreshTimer = setInterval(() => {
-    loadAuth();
-    loadFlags();
-    loadStats();
-    loadEvents();
-    loadJobs();
-  }, 60000);
-}
-
-fetch('/admin/server-info').then(r=>r.json()).then(d=>{
-  const dt=new Date(d.started_at);
-  const pad=n=>String(n).padStart(2,'0');
-  document.getElementById('buildTime').textContent=`Build: ${pad(dt.getDate())}/${pad(dt.getMonth()+1)}/${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
-}).catch(()=>{});
-refresh();
+$('periodToggle').onclick=()=>$('periodControls').classList.toggle('open');
+$('refreshBtn').onclick=()=>{loadSummary();loadAuth()};
+document.querySelectorAll('[data-period]').forEach(btn=>{
+  btn.onclick=()=>{
+    document.querySelectorAll('[data-period]').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    state.period=btn.dataset.period;
+    if(state.period!=='custom')loadSummary();
+  };
+});
+$('customStart').onchange=e=>{state.start=e.target.value;if(state.period==='custom'&&state.start&&state.end)loadSummary()};
+$('customEnd').onchange=e=>{state.end=e.target.value;if(state.period==='custom'&&state.start&&state.end)loadSummary()};
+loadSummary();
+loadAuth();
 </script>
 </body>
 </html>

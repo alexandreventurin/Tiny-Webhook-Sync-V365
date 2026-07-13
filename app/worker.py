@@ -1393,6 +1393,7 @@ async def run_worker_once_detailed(limit: int = 50, reset_locks: bool = True) ->
 
 TOKEN_REFRESH_MARGIN_MINUTES = 30
 TOKEN_CHECK_INTERVAL_SECONDS = 1800
+PROACTIVE_TOKEN_REFRESH_ENABLED = os.getenv("PROACTIVE_TOKEN_REFRESH_ENABLED", "0").lower() in ("1", "true", "yes")
 WORKER_POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "30"))
 WORKER_BATCH_SIZE = int(os.getenv("WORKER_BATCH_SIZE", "3"))
 WORKER_HEARTBEAT_SECONDS = int(os.getenv("WORKER_HEARTBEAT_SECONDS", "120"))
@@ -1400,6 +1401,8 @@ WORKER_STALE_LOCK_RESET_SECONDS = int(os.getenv("WORKER_STALE_LOCK_RESET_SECONDS
 
 async def maybe_refresh_tokens():
     """Renova tokens proativamente. Faz refresh se expirado, expirando em breve (<30min), ou updated_at > 3h."""
+    if not PROACTIVE_TOKEN_REFRESH_ENABLED:
+        return
     try:
         from app.tiny_oauth import get_tokens_from_db, ensure_access_token
         for account in ("A", "B"):

@@ -1162,9 +1162,7 @@ async def orders_panel():
 
 @app.get("/admin/orders-panel/data")
 async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_limit: int = 80):
-    from app.db import get_pool, upsert_orders_c_fetched, upsert_orders_c_fetch_error
-    from app.tiny_client import TinyClient
-    from app.tiny_oauth import ensure_access_token
+    from app.db import get_pool
     limit = max(1, min(limit, 1000))
     days = max(1, min(days, 365))
     divergence_limit = max(0, min(divergence_limit, 120))
@@ -1264,8 +1262,6 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
     cancelled_reviews = {str(row["venda_a_id"]): dict(row) for row in cancelled_review_rows}
     origin = [_order_summary_from_snapshot(dict(row), mapped_product_ids) for row in origin_rows]
     synced = []
-    token_c_for_counts = await ensure_access_token("B") if divergence_limit else None
-    client_c_for_counts = TinyClient(token_c_for_counts) if token_c_for_counts else None
     for row in synced_rows:
         item = dict(row)
         payload = _json_payload(item.get("fetched_payload"))
@@ -1276,13 +1272,6 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
         }, mapped_product_ids)
         item.update(origin_summary)
         destination_payload = _json_payload(item.get("fetched_payload_c"))
-        if client_c_for_counts and len(synced) < divergence_limit and item.get("venda_c_id") and not destination_payload:
-            try:
-                destination_payload = await client_c_for_counts.get_order_details(str(item["venda_c_id"]))
-                await upsert_orders_c_fetched(str(item["venda_c_id"]), destination_payload)
-            except Exception as exc:
-                await upsert_orders_c_fetch_error(str(item["venda_c_id"]), getattr(exc, "status_code", None), str(exc))
-                item["destination_fetch_error"] = str(exc)[:160]
         destination_fields = _order_display_fields(destination_payload)
         destination_status = normalize_status(destination_payload.get("situacao") if isinstance(destination_payload, dict) else None)
         destination_status = destination_status or normalize_status(item.get("last_sync_status")) or "em_aberto"
@@ -1435,7 +1424,7 @@ async def admin_orders_panel_cancelled_mark_reviewed(request: Request):
 
 
 @app.get("/admin/orders-panel/detail")
-async def admin_orders_panel_detail(venda_a_id: str | None = None, venda_c_id: str | None = None, job_id: int | None = None):
+async def admin_orders_panel_detail(venda_a_id: str | None = None, venda_c_id: str | None = None, job_id: int | None = None, refresh: bool = False):
     from app.db import get_pool, upsert_orders_c_fetched, upsert_orders_c_fetch_error
     p = await get_pool()
     origin_payload = {}
@@ -1483,7 +1472,7 @@ async def admin_orders_panel_detail(venda_a_id: str | None = None, venda_c_id: s
 
     destination_payload = {}
     destination_error = None
-    if venda_c_id:
+    if venda_c_id and refresh:
         try:
             from app.tiny_oauth import ensure_access_token
             from app.tiny_client import TinyClient
@@ -1496,8 +1485,8 @@ async def admin_orders_panel_detail(venda_a_id: str | None = None, venda_c_id: s
         except Exception as exc:
             await upsert_orders_c_fetch_error(str(venda_c_id), getattr(exc, "status_code", None), str(exc))
             destination_error = str(exc)
-        if not destination_payload and destination_snapshot_payload:
-            destination_payload = destination_snapshot_payload
+    if not destination_payload and destination_snapshot_payload:
+        destination_payload = destination_snapshot_payload
 
     comparison_fields = _comparison_fields(origin_payload, destination_payload) if destination_payload else _comparison_fields(origin_payload, {})
     divergence_count = len([field for field in comparison_fields if field["divergent"]])

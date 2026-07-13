@@ -1142,30 +1142,12 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
     p = await get_pool()
     async with p.acquire() as conn:
         origin_rows = await conn.fetch("""
-            WITH source_orders AS (
-                SELECT oas.*,
-                       CASE
-                           WHEN oas.fetched_payload::jsonb->>'data' ~ '^\\d{4}-\\d{2}-\\d{2}'
-                           THEN substring(oas.fetched_payload::jsonb->>'data' from 1 for 10)::date
-                           ELSE NULL
-                       END AS order_date
-                FROM public.orders_a_snapshot oas
-            )
             SELECT so.venda_a_id, so.webhook_payload, so.fetched_payload, so.created_at, so.updated_at,
-                   latest_event.created_at AS webhook_received_at,
+                   so.updated_at AS webhook_received_at,
                    approve_job.run_after AS approval_scheduled_at,
                    create_job.run_after AS transfer_scheduled_at
-            FROM source_orders so
+            FROM public.orders_a_snapshot so
             LEFT JOIN public.orders_map om ON om.venda_a_id::text = so.venda_a_id
-            LEFT JOIN LATERAL (
-                SELECT created_at
-                FROM public.events
-                WHERE source = 'A'
-                  AND topic = 'vendas'
-                  AND venda_id = so.venda_a_id
-                ORDER BY created_at DESC
-                LIMIT 1
-            ) latest_event ON true
             LEFT JOIN LATERAL (
                 SELECT run_after
                 FROM public.jobs
@@ -1183,46 +1165,22 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
                 LIMIT 1
             ) create_job ON true
             WHERE om.venda_a_id IS NULL
-              AND (so.order_date IS NULL OR so.order_date >= CURRENT_DATE - ($2::int || ' days')::interval)
-            ORDER BY COALESCE(so.order_date, so.updated_at::date) DESC, so.updated_at DESC
+              AND so.updated_at >= NOW() - ($2::int || ' days')::interval
+            ORDER BY so.updated_at DESC
             LIMIT $1
         """, limit, days)
         synced_rows = await conn.fetch("""
-            WITH mapped_orders AS (
-                SELECT om.external_key, om.venda_a_id, om.venda_c_id, om.created_at, om.updated_at,
-                       om.last_sync_status, om.last_sync_at, oas.fetched_payload,
-                       ocs.fetched_payload AS fetched_payload_c, ocs.fetched_at AS fetched_at_c,
-                       CASE
-                           WHEN oas.fetched_payload::jsonb->>'data' ~ '^\\d{4}-\\d{2}-\\d{2}'
-                           THEN substring(oas.fetched_payload::jsonb->>'data' from 1 for 10)::date
-                           ELSE NULL
-                       END AS order_date
-                FROM public.orders_map om
-                LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
-                LEFT JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = om.venda_c_id::text
-            )
-            SELECT external_key, venda_a_id, venda_c_id, created_at, updated_at,
-                   last_sync_status, last_sync_at, fetched_payload, fetched_payload_c, fetched_at_c
-            FROM mapped_orders
-            WHERE order_date IS NULL OR order_date >= CURRENT_DATE - ($2::int || ' days')::interval
-            ORDER BY COALESCE(order_date, updated_at::date) DESC, updated_at DESC
+            SELECT om.external_key, om.venda_a_id, om.venda_c_id, om.created_at, om.updated_at,
+                   om.last_sync_status, om.last_sync_at, oas.fetched_payload,
+                   ocs.fetched_payload AS fetched_payload_c, ocs.fetched_at AS fetched_at_c
+            FROM public.orders_map om
+            LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
+            LEFT JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = om.venda_c_id::text
+            WHERE om.updated_at >= NOW() - ($2::int || ' days')::interval
+            ORDER BY om.updated_at DESC
             LIMIT $1
         """, limit, days)
-        synced_count_row = await conn.fetchrow("""
-            WITH mapped_orders AS (
-                SELECT om.updated_at,
-                       CASE
-                           WHEN oas.fetched_payload::jsonb->>'data' ~ '^\\d{4}-\\d{2}-\\d{2}'
-                           THEN substring(oas.fetched_payload::jsonb->>'data' from 1 for 10)::date
-                           ELSE NULL
-                       END AS order_date
-                FROM public.orders_map om
-                LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
-            )
-            SELECT COUNT(*) AS total
-            FROM mapped_orders
-            WHERE order_date IS NULL OR order_date >= CURRENT_DATE - ($1::int || ' days')::interval
-        """, days)
+        synced_count_row = {"total": len(synced_rows)}
         cancelled_review_rows = await conn.fetch("""
             SELECT venda_a_id, status, created_at, reviewed_at, updated_at
             FROM public.cancelled_order_reviews

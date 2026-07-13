@@ -1361,6 +1361,157 @@ async def admin_orders_panel_summary(
     }
 
 
+@app.get("/admin/orders-panel/queue-data")
+async def admin_orders_panel_queue_data(limit: int = 120):
+    from app.db import get_pool
+    limit = max(10, min(limit, 500))
+    p = await get_pool()
+    async with p.acquire() as conn:
+        queue_rows = await conn.fetch("""
+            SELECT j.id, j.job_type, j.dedupe_key, j.status, j.payload, j.attempts, j.last_error,
+                   j.action_preview, j.created_at, j.updated_at, j.run_after,
+                   COALESCE(
+                       j.payload::jsonb->>'venda_a_id',
+                       CASE WHEN j.payload::jsonb->>'source' = 'A' THEN j.payload::jsonb->>'venda_id' END,
+                       oma.venda_a_id::text,
+                       omc.venda_a_id::text
+                   ) AS venda_a_id,
+                   COALESCE(
+                       j.payload::jsonb->>'venda_c_id',
+                       CASE WHEN j.payload::jsonb->>'source' = 'B' THEN j.payload::jsonb->>'venda_id' END,
+                       oma.venda_c_id::text,
+                       omc.venda_c_id::text
+                   ) AS venda_c_id,
+                   oas.fetched_payload AS fetched_payload_a,
+                   ocs.fetched_payload AS fetched_payload_c
+            FROM public.jobs j
+            LEFT JOIN public.orders_map oma ON oma.venda_a_id::text = COALESCE(
+                j.payload::jsonb->>'venda_a_id',
+                CASE WHEN j.payload::jsonb->>'source' = 'A' THEN j.payload::jsonb->>'venda_id' END
+            )
+            LEFT JOIN public.orders_map omc ON omc.venda_c_id::text = COALESCE(
+                j.payload::jsonb->>'venda_c_id',
+                CASE WHEN j.payload::jsonb->>'source' = 'B' THEN j.payload::jsonb->>'venda_id' END
+            )
+            LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = COALESCE(
+                j.payload::jsonb->>'venda_a_id',
+                CASE WHEN j.payload::jsonb->>'source' = 'A' THEN j.payload::jsonb->>'venda_id' END,
+                oma.venda_a_id::text,
+                omc.venda_a_id::text
+            )
+            LEFT JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = COALESCE(
+                j.payload::jsonb->>'venda_c_id',
+                CASE WHEN j.payload::jsonb->>'source' = 'B' THEN j.payload::jsonb->>'venda_id' END,
+                oma.venda_c_id::text,
+                omc.venda_c_id::text
+            )
+            WHERE j.status IN ('queued', 'running', 'failed', 'dead', 'waiting_sku', 'skipped_not_mapped')
+               OR j.created_at >= NOW() - INTERVAL '2 days'
+               OR j.updated_at >= NOW() - INTERVAL '2 days'
+               OR j.run_after >= NOW() - INTERVAL '2 days'
+            ORDER BY COALESCE(j.run_after, j.updated_at, j.created_at) DESC
+            LIMIT $1
+        """, limit)
+        mapped_product_rows = await conn.fetch("""
+            SELECT id_a
+            FROM public.products_map
+            WHERE id_c IS NOT NULL
+        """)
+        event_rows = await conn.fetch("""
+            SELECT id, source, topic, venda_id, codigo_situacao, id_nota_fiscal, action_result, created_at
+            FROM public.events
+            ORDER BY created_at DESC
+            LIMIT 100
+        """)
+
+    mapped_product_ids = {int(row["id_a"]) for row in mapped_product_rows if row["id_a"] is not None}
+    now = datetime.now(timezone.utc)
+    queue_limit_10min = max(1, int(os.getenv("TINY_WRITE_LIMIT_10MIN", "600")))
+    queue_items = []
+    queue_groups_by_key = {}
+    for row in queue_rows:
+        item = dict(row)
+        payload = _json_payload(item.get("payload"))
+        scheduled_at = item.get("run_after") or item.get("created_at")
+        if scheduled_at and scheduled_at.tzinfo is None:
+            scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+        window_start = _window_start_10min(scheduled_at)
+        window_end = window_start + timedelta(minutes=10) if window_start else None
+        window_key = window_start.isoformat() if window_start else "sem-data"
+        status_label = _queue_status_label(item.get("status"))
+        writes = _queue_account_writes(item.get("job_type"), payload)
+        origin_payload = _json_payload(item.get("fetched_payload_a"))
+        destination_payload = _json_payload(item.get("fetched_payload_c"))
+        origin_summary = _order_summary_from_snapshot({
+            "venda_a_id": str(item.get("venda_a_id") or ""),
+            "fetched_payload": origin_payload,
+            "updated_at": item.get("updated_at"),
+        }, mapped_product_ids)
+        destination_fields = _order_display_fields(destination_payload)
+        destination_status = normalize_status(destination_payload.get("situacao") if isinstance(destination_payload, dict) else None)
+        queue_item = {
+            "id": item.get("id"),
+            "job_type": item.get("job_type"),
+            "dedupe_key": item.get("dedupe_key"),
+            "venda_a_id": item.get("venda_a_id"),
+            "venda_c_id": item.get("venda_c_id"),
+            "scheduled_at": scheduled_at,
+            "window_start": window_start,
+            "window_end": window_end,
+            "window_key": window_key,
+            "is_future": bool(scheduled_at and scheduled_at > now + timedelta(minutes=10)),
+            "task_label": _queue_task_label(item.get("job_type")),
+            "task_status": status_label,
+            "task_status_raw": item.get("status"),
+            "attempts": item.get("attempts") or 0,
+            "last_error": item.get("last_error"),
+            "last_sync_at": item.get("updated_at"),
+            "updated_at": item.get("updated_at"),
+            "created_at": item.get("created_at"),
+            "account_writes": writes,
+            "nota_fiscal_destino": destination_fields.get("nota_fiscal"),
+            "numero_destino": destination_fields.get("numero_pedido"),
+            "situacao_destino": destination_status,
+            "situacao_destino_label": _status_label(destination_status) if destination_status else None,
+        }
+        queue_item.update(origin_summary)
+        queue_items.append(queue_item)
+
+        group = queue_groups_by_key.setdefault(window_key, {
+            "window_key": window_key,
+            "window_start": window_start,
+            "window_end": window_end,
+            "planned_a": 0,
+            "planned_c": 0,
+            "success_a": 0,
+            "success_c": 0,
+            "count": 0,
+            "limit_a": queue_limit_10min,
+            "limit_c": queue_limit_10min,
+        })
+        group["planned_a"] += writes.get("A", 0)
+        group["planned_c"] += writes.get("C", 0)
+        if status_label == "concluido":
+            group["success_a"] += writes.get("A", 0)
+            group["success_c"] += writes.get("C", 0)
+        group["count"] += 1
+
+    queue_groups = []
+    for group in queue_groups_by_key.values():
+        group["remaining_a"] = max(0, group["limit_a"] - group["planned_a"])
+        group["remaining_c"] = max(0, group["limit_c"] - group["planned_c"])
+        queue_groups.append(group)
+    queue_groups.sort(key=lambda g: g.get("window_start") or datetime.max.replace(tzinfo=timezone.utc))
+    return {
+        "queue": {
+            "items": queue_items,
+            "groups": queue_groups,
+            "write_limit_10min": queue_limit_10min,
+        },
+        "events": [dict(row) for row in event_rows],
+    }
+
+
 @app.get("/admin/orders-panel/data")
 async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_limit: int = 80):
     from app.db import get_pool

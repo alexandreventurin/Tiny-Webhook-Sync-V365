@@ -49,14 +49,18 @@ async def lifespan(app: FastAPI):
                 logging.getLogger(__name__).info(f"Recovered {recovered} stale import run(s) from previous restart")
         except Exception as exc:
             logging.getLogger(__name__).warning("Could not recover stale import runs during startup: %s", exc)
-    worker_task = asyncio.create_task(worker_loop())
+    worker_enabled = os.getenv("WORKER_ENABLED", "1").lower() in ("1", "true", "yes")
+    worker_task = asyncio.create_task(worker_loop()) if worker_enabled else None
+    if not worker_enabled:
+        logging.getLogger(__name__).warning("Worker disabled by WORKER_ENABLED=0")
     yield
     stop_worker()
-    worker_task.cancel()
-    try:
-        await worker_task
-    except asyncio.CancelledError:
-        pass
+    if worker_task:
+        worker_task.cancel()
+        try:
+            await worker_task
+        except asyncio.CancelledError:
+            pass
     await close_db()
 
 

@@ -975,7 +975,15 @@ def _comparison_fields(origin: dict, destination: dict) -> list[dict]:
 
 def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None = None) -> dict:
     mapped_product_ids = mapped_product_ids or set()
-    payload = _json_payload(row.get("fetched_payload")) or _json_payload(row.get("webhook_payload"))
+    fetched_payload = _json_payload(row.get("fetched_payload"))
+    webhook_payload = _json_payload(row.get("webhook_payload"))
+    if fetched_payload and webhook_payload:
+        payload = dict(fetched_payload)
+        for key, value in webhook_payload.items():
+            if value is not None:
+                payload[key] = value
+    else:
+        payload = fetched_payload or webhook_payload
     cliente = payload.get("cliente") if isinstance(payload, dict) else {}
     ecommerce = payload.get("ecommerce") if isinstance(payload, dict) else {}
     endereco_entrega = payload.get("enderecoEntrega") if isinstance(payload, dict) else {}

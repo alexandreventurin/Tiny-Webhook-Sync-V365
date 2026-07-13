@@ -237,7 +237,7 @@ async def init_db():
                 await conn.execute("ALTER TABLE public.jobs DROP CONSTRAINT IF EXISTS jobs_job_type_check")
                 await conn.execute("""
                     ALTER TABLE public.jobs ADD CONSTRAINT jobs_job_type_check
-                    CHECK (job_type = ANY (ARRAY['noop','create_order_c','sync_status','fetch_label','fetch_nf_link','sync_nf_link','fetch_order_a','add_tag_c','add_tag_a','sync_tracking_c_to_a','update_numero_compra','approve_order_a']))
+                    CHECK (job_type = ANY (ARRAY['noop','create_order_c','sync_status','fetch_label','fetch_nf_link','sync_nf_link','fetch_order_a','add_tag_c','add_tag_a','sync_tracking_c_to_a','update_numero_compra','approve_order_a','sync_order_fields']))
                 """)
             except Exception:
                 pass

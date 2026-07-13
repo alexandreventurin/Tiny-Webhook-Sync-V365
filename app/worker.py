@@ -33,6 +33,7 @@ from app.db import (
     update_orders_map_sync,
     update_job_waiting_sku,
     upsert_partial_product,
+    get_pool,
 )
 from app.settings import (
     ENABLE_FETCH_A, EXECUTE_TINY_C, 
@@ -292,6 +293,160 @@ def build_transportador_v3(
     return transportador
 
 worker_running = False
+
+
+def _parse_dt(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _payload_modified_at(payload: dict):
+    if not isinstance(payload, dict):
+        return None
+    for key in (
+        "dataAlteracao",
+        "dataAtualizacao",
+        "ultimaAlteracao",
+        "updatedAt",
+        "updated_at",
+        "alteradoEm",
+        "modificadoEm",
+    ):
+        parsed = _parse_dt(payload.get(key))
+        if parsed:
+            return parsed
+    return None
+
+
+async def _get_snapshot_times(venda_a_id: str, venda_c_id: str) -> tuple[datetime | None, datetime | None]:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT
+                CASE
+                    WHEN oas.fetched_at IS NULL THEN oas.updated_at
+                    WHEN oas.updated_at IS NULL THEN oas.fetched_at
+                    ELSE GREATEST(oas.fetched_at, oas.updated_at)
+                END AS a_seen_at,
+                CASE
+                    WHEN ocs.fetched_at IS NULL THEN ocs.updated_at
+                    WHEN ocs.updated_at IS NULL THEN ocs.fetched_at
+                    ELSE GREATEST(ocs.fetched_at, ocs.updated_at)
+                END AS c_seen_at
+            FROM public.orders_map om
+            LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
+            LEFT JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = om.venda_c_id::text
+            WHERE om.venda_a_id::text = $1 AND om.venda_c_id::text = $2
+            LIMIT 1
+        """, str(venda_a_id), str(venda_c_id))
+    if not row:
+        return None, None
+    return row["a_seen_at"], row["c_seen_at"]
+
+
+def _clean_dict(value: dict) -> dict:
+    return {k: v for k, v in value.items() if v not in (None, "")}
+
+
+def _first_present(*values):
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _source_address(payload: dict) -> dict:
+    cliente = payload.get("cliente") if isinstance(payload.get("cliente"), dict) else {}
+    address = payload.get("enderecoEntrega") or payload.get("endereco") or cliente.get("endereco") or {}
+    return address if isinstance(address, dict) else {}
+
+
+def _source_transportador(payload: dict) -> dict:
+    transportador = payload.get("transportador") if isinstance(payload.get("transportador"), dict) else {}
+    return transportador if isinstance(transportador, dict) else {}
+
+
+def _source_ecommerce_number(payload: dict) -> str | None:
+    ecommerce = payload.get("ecommerce") if isinstance(payload.get("ecommerce"), dict) else {}
+    return _first_present(
+        ecommerce.get("numeroPedidoEcommerce"),
+        ecommerce.get("numeroPedido"),
+        ecommerce.get("pedido"),
+        payload.get("numeroPedidoEcommerce"),
+        payload.get("numeroOrdemCompra"),
+    )
+
+
+def _build_field_update_payload(source_payload: dict, field_keys: list[str], target_account: str) -> tuple[dict, list[str], list[str]]:
+    update_payload: dict = {}
+    applied: list[str] = []
+    unsupported: list[str] = []
+    cliente = source_payload.get("cliente") if isinstance(source_payload.get("cliente"), dict) else {}
+
+    cliente_payload = {}
+    if "nome" in field_keys:
+        cliente_payload["nome"] = cliente.get("nome")
+    if "cpf" in field_keys:
+        cliente_payload["cpfCnpj"] = cliente.get("cpfCnpj") or cliente.get("cpf_cnpj")
+    cliente_payload = _clean_dict(cliente_payload)
+    if cliente_payload:
+        update_payload["cliente"] = cliente_payload
+        applied.extend([key for key in ("nome", "cpf") if key in field_keys])
+
+    address_keys = {"cep_entrega", "cidade_entrega", "uf_entrega", "numero_endereco", "complemento_endereco"}
+    if address_keys.intersection(field_keys):
+        address = _source_address(source_payload)
+        update_payload["enderecoEntrega"] = _clean_dict({
+            "endereco": address.get("endereco") or address.get("logradouro"),
+            "enderecoNro": address.get("enderecoNro") or address.get("numero"),
+            "numero": address.get("enderecoNro") or address.get("numero"),
+            "complemento": address.get("complemento"),
+            "bairro": address.get("bairro"),
+            "municipio": address.get("municipio") or address.get("cidade"),
+            "cep": address.get("cep"),
+            "uf": address.get("uf"),
+        })
+        applied.extend([key for key in field_keys if key in address_keys])
+
+    if "numero_ecommerce" in field_keys:
+        ecommerce_number = _source_ecommerce_number(source_payload)
+        if target_account == "B" and ecommerce_number:
+            update_payload["numeroOrdemCompra"] = str(ecommerce_number)
+            applied.append("numero_ecommerce")
+        else:
+            unsupported.append("numero_ecommerce")
+
+    if {"forma_envio", "forma_frete"}.intersection(field_keys):
+        if target_account == "B":
+            transportador = _source_transportador(source_payload)
+            forma_envio = transportador.get("formaEnvio") or {}
+            forma_frete = transportador.get("formaFrete") or {}
+            forma_envio_nome = forma_envio.get("nome") if isinstance(forma_envio, dict) else forma_envio
+            forma_frete_nome = forma_frete.get("nome") if isinstance(forma_frete, dict) else forma_frete
+            update_payload["transportador"] = build_transportador_v3(
+                forma_envio_origem=forma_envio_nome,
+                forma_frete_origem=forma_frete_nome,
+                codigo_rastreio=transportador.get("codigoRastreamento"),
+                url_rastreio=transportador.get("urlRastreamento"),
+                volumes=transportador.get("volumes") or 1,
+            )
+            applied.extend([key for key in ("forma_envio", "forma_frete") if key in field_keys])
+        else:
+            unsupported.extend([key for key in ("forma_envio", "forma_frete") if key in field_keys])
+
+    if "itens" in field_keys:
+        unsupported.append("itens")
+
+    return update_payload, applied, unsupported
 
 
 async def process_job(job: dict) -> None:
@@ -1297,6 +1452,108 @@ async def process_job(job: dict) -> None:
             }
             await update_job_done(job_id, action_preview)
             logger.info(f"Job {job_id} update_numero_compra: C:{venda_c_id_str} ← {numero_pedido_ecommerce}")
+
+        elif job_type == 'sync_order_fields':
+            venda_a_id_str = str(payload.get("venda_a_id") or "")
+            venda_c_id_str = str(payload.get("venda_c_id") or "")
+            field_keys = [str(key) for key in (payload.get("field_keys") or []) if key]
+            if not venda_a_id_str or not venda_c_id_str or not field_keys:
+                await update_job_failed(job_id, "missing venda_a_id, venda_c_id or field_keys", attempts)
+                return
+
+            a_seen_at, c_seen_at = await _get_snapshot_times(venda_a_id_str, venda_c_id_str)
+            min_dt = datetime.min.replace(tzinfo=timezone.utc)
+            source_account = "A" if (a_seen_at or min_dt) >= (c_seen_at or min_dt) else "B"
+            target_account = "B" if source_account == "A" else "A"
+
+            token_a = await ensure_access_token("A")
+            token_c = await ensure_access_token("B")
+            if not token_a or not token_c:
+                await update_job_failed(job_id, "No valid OAuth token for A or B", attempts)
+                return
+
+            client_a = TinyClient(token_a)
+            client_c = TinyClient(token_c)
+            order_a = await call_tiny("A", client_a, "get_order_details", venda_a_id_str)
+            await upsert_orders_a_fetched(venda_a_id=venda_a_id_str, fetched_payload=order_a)
+            order_c = await refresh_order_c_snapshot(client_c, venda_c_id_str) or {}
+
+            modified_a = _payload_modified_at(order_a) or a_seen_at
+            modified_c = _payload_modified_at(order_c) or c_seen_at
+            if modified_c and modified_a and modified_c > modified_a:
+                source_account = "B"
+                target_account = "A"
+            elif modified_a and modified_c and modified_a >= modified_c:
+                source_account = "A"
+                target_account = "B"
+
+            source_payload = order_a if source_account == "A" else order_c
+            target_client = client_c if target_account == "B" else client_a
+            target_id = venda_c_id_str if target_account == "B" else venda_a_id_str
+            applied_fields = []
+            unsupported_fields = []
+
+            status_code_by_name = {
+                "faturado": 1,
+                "cancelado": 2,
+                "aprovado": 3,
+                "preparando_envio": 4,
+                "enviado": 5,
+                "entregue": 6,
+                "pronto_envio": 7,
+                "dados_incompletos": 8,
+                "nao_entregue": 9,
+            }
+
+            if "situacao" in field_keys:
+                status_name = normalize_status(source_payload.get("situacao"))
+                status_code = status_code_by_name.get(status_name or "")
+                if status_code:
+                    await call_tiny(target_account, target_client, "update_order_status", target_id, status_code)
+                    applied_fields.append("situacao")
+                    await update_orders_map_sync(venda_a_id_str, venda_c_id_str, status_name)
+                else:
+                    unsupported_fields.append("situacao")
+
+            if "codigo_rastreamento" in field_keys:
+                transportador = _source_transportador(source_payload)
+                codigo_rastreamento = (transportador.get("codigoRastreamento") or source_payload.get("codigoRastreamento") or "").strip()
+                url_rastreamento = (transportador.get("urlRastreamento") or source_payload.get("urlRastreamento") or "").strip()
+                if codigo_rastreamento:
+                    await call_tiny(target_account, target_client, "update_order_despacho", target_id, codigo_rastreamento, url_rastreamento)
+                    applied_fields.append("codigo_rastreamento")
+                else:
+                    unsupported_fields.append("codigo_rastreamento")
+
+            update_payload, partial_applied, partial_unsupported = _build_field_update_payload(source_payload, field_keys, target_account)
+            if update_payload:
+                await call_tiny(target_account, target_client, "update_order", target_id, update_payload)
+                applied_fields.extend(partial_applied)
+            unsupported_fields.extend(partial_unsupported)
+
+            if target_account == "A":
+                refreshed_a = await call_tiny("A", client_a, "get_order_details", venda_a_id_str)
+                await upsert_orders_a_fetched(venda_a_id=venda_a_id_str, fetched_payload=refreshed_a)
+            else:
+                await refresh_order_c_snapshot(client_c, venda_c_id_str)
+
+            applied_fields = sorted(set(applied_fields))
+            unsupported_fields = sorted(set(unsupported_fields) - set(applied_fields))
+            action_preview = {
+                "would": "sync_order_fields",
+                "done": bool(applied_fields),
+                "venda_a_id": venda_a_id_str,
+                "venda_c_id": venda_c_id_str,
+                "source_account": source_account,
+                "target_account": target_account,
+                "requested_fields": field_keys,
+                "applied_fields": applied_fields,
+                "unsupported_fields": unsupported_fields,
+                "a_seen_at": a_seen_at.isoformat() if a_seen_at else None,
+                "c_seen_at": c_seen_at.isoformat() if c_seen_at else None,
+            }
+            await update_job_done(job_id, action_preview)
+            logger.info(f"Job {job_id} sync_order_fields {source_account}->{target_account} A:{venda_a_id_str} C:{venda_c_id_str} fields={applied_fields} unsupported={unsupported_fields}")
 
         elif job_type == 'noop':
             action_preview = {

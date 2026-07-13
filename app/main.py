@@ -23,6 +23,7 @@ SERVER_STARTED_AT = datetime.now(timezone.utc)
 
 from app.db import (
     init_db, close_db, insert_event, insert_job,
+    get_pool,
     get_events_count, get_jobs_count_by_status,
     get_jobs_list, get_last_event_at, get_last_job_done_at,
     get_orders_a_list, get_order_a_snapshot, get_orders_map_list,
@@ -803,6 +804,7 @@ def _queue_task_label(job_type: str | None) -> str:
         "add_tag_c": "Adicionar marcador em C",
         "add_tag_a": "Adicionar marcador em A",
         "update_numero_compra": "Atualizar número ecommerce em C",
+        "sync_order_fields": "Sincronizar divergências",
         "noop": "Sem ação",
     }
     return labels.get(job_type or "", job_type or "Tarefa")
@@ -824,6 +826,13 @@ def _queue_account_writes(job_type: str | None, payload: dict) -> dict:
         return {"A": 1, "C": 0}
     if job_type == "update_numero_compra":
         return {"A": 0, "C": 1}
+    if job_type == "sync_order_fields":
+        target = payload.get("target") if isinstance(payload, dict) else None
+        if target == "A":
+            return {"A": 1, "C": 0}
+        if target == "B":
+            return {"A": 0, "C": 1}
+        return {"A": 1, "C": 1}
     if job_type == "sync_status":
         return {"A": 0, "C": 1} if source == "A" else {"A": 1, "C": 0}
     return {"A": 0, "C": 0}
@@ -1263,7 +1272,12 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
         if destination_payload:
             try:
                 fields = _comparison_fields(payload, destination_payload)
-                item["divergence_count"] = len([field for field in fields if field["divergent"]])
+                divergent_fields = [field for field in fields if field["divergent"]]
+                item["divergence_count"] = len(divergent_fields)
+                item["divergence_types"] = [
+                    {"key": field["key"], "label": field["label"]}
+                    for field in divergent_fields
+                ]
             except Exception as exc:
                 item["divergence_count_error"] = str(exc)[:160]
         synced.append(item)
@@ -1374,6 +1388,98 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
             "write_limit_10min": queue_limit_10min,
         },
         "period_days": days,
+    }
+
+
+@app.post("/admin/orders-panel/divergences/sync")
+async def admin_orders_panel_sync_divergences(request: Request):
+    payload = await request.json()
+    selected_keys = payload.get("field_keys") if isinstance(payload, dict) else []
+    selected_keys = [str(key) for key in selected_keys if key]
+    days = int(payload.get("days") or 30) if isinstance(payload, dict) else 30
+    days = max(1, min(days, 365))
+    if not selected_keys:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Nenhum tipo de divergência selecionado."})
+
+    allowed_keys = {key for key, _label, compare in [
+        ("nota_fiscal", "Nota fiscal", False),
+        ("numero_pedido", "Número do pedido", False),
+        ("id_pedido", "ID do pedido", False),
+        ("data", "Data", False),
+        ("nome", "Nome", True),
+        ("cpf", "CPF/CNPJ", True),
+        ("situacao", "Situação", True),
+        ("cep_entrega", "CEP entrega", True),
+        ("cidade_entrega", "Cidade", True),
+        ("uf_entrega", "UF", True),
+        ("numero_endereco", "Nº endereço", True),
+        ("complemento_endereco", "Complemento", True),
+        ("itens", "Itens", True),
+        ("total_produtos", "Total dos produtos", False),
+        ("forma_envio", "Forma de envio", True),
+        ("forma_frete", "Forma de frete", True),
+        ("codigo_rastreamento", "Código de rastreamento", True),
+        ("ecommerce_nome", "Nome do ecommerce", False),
+        ("numero_ecommerce", "Número no ecommerce", True),
+    ] if compare}
+    selected_keys = [key for key in selected_keys if key in allowed_keys]
+    if not selected_keys:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Os tipos selecionados não são sincronizáveis."})
+
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT om.venda_a_id, om.venda_c_id,
+                   oas.fetched_payload AS fetched_payload_a,
+                   ocs.fetched_payload AS fetched_payload_c
+            FROM public.orders_map om
+            LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
+            LEFT JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = om.venda_c_id::text
+            WHERE om.venda_a_id IS NOT NULL
+              AND om.venda_c_id IS NOT NULL
+              AND om.updated_at >= NOW() - ($1::int || ' days')::interval
+            ORDER BY om.updated_at DESC
+            LIMIT 1000
+        """, days)
+
+    created = 0
+    candidates = 0
+    now_stamp = int(time.time())
+    key_hash = hashlib.sha1(",".join(sorted(selected_keys)).encode("utf-8")).hexdigest()[:10]
+    for index, row in enumerate(rows):
+        origin_payload = _json_payload(row.get("fetched_payload_a"))
+        destination_payload = _json_payload(row.get("fetched_payload_c"))
+        if not origin_payload or not destination_payload:
+            continue
+        fields = _comparison_fields(origin_payload, destination_payload)
+        divergent_keys = [field["key"] for field in fields if field["divergent"] and field["key"] in selected_keys]
+        if not divergent_keys:
+            continue
+        candidates += 1
+        venda_a_id = str(row["venda_a_id"])
+        venda_c_id = str(row["venda_c_id"])
+        job_payload = {
+            "source": "panel",
+            "mode": "newer_wins",
+            "venda_a_id": venda_a_id,
+            "venda_c_id": venda_c_id,
+            "field_keys": divergent_keys,
+        }
+        dedupe_key = f"panel:sync_order_fields:{venda_a_id}:{venda_c_id}:{key_hash}:{now_stamp}"
+        if await insert_job(
+            job_type="sync_order_fields",
+            dedupe_key=dedupe_key,
+            event_id=None,
+            payload=job_payload,
+            delay_minutes=index // 20,
+        ):
+            created += 1
+
+    return {
+        "ok": True,
+        "selected_field_keys": selected_keys,
+        "candidates": candidates,
+        "created": created,
     }
 
 

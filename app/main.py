@@ -148,7 +148,7 @@ def _login_html(error: str = "", next_url: str = "/dashboard") -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Login - RJ-Sync</title>
+<title>Login - Gestão de Pedidos Rejuderme</title>
 <style>
 *{{box-sizing:border-box}}body{{margin:0;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#eef2f7;color:#172033;display:grid;place-items:center;padding:24px}}
 .login{{width:100%;max-width:380px;background:#fff;border:1px solid #d8e0ea;border-radius:8px;padding:28px;box-shadow:0 20px 60px rgba(31,41,55,.12)}}
@@ -160,7 +160,7 @@ button{{width:100%;height:42px;margin-top:18px;border:0;border-radius:6px;backgr
 </head>
 <body>
 <main class="login">
-  <h1>RJ-Sync</h1>
+  <h1>Gestão de Pedidos Rejuderme</h1>
   <p>Acesso administrativo</p>
   {error_html}
   <form method="post" action="/login">

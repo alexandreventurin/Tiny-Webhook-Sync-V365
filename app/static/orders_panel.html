@@ -184,7 +184,7 @@ function renderAuthMini(){
   const tokens={A:null,B:null};
   (state.auth.tokens||[]).forEach(t=>tokens[t.account]=t);
   const labels={A:'Rejuderme',B:'V.365'};
-  const paths={A:'/auth/a/start',B:'/auth/c/start'};
+  const paths={A:'/auth/rj/start',B:'/auth/v365/start'};
   bar.innerHTML=['A','B'].map(acc=>{
     const t=tokens[acc];
     const h=state.auth.health?.[acc];
@@ -267,8 +267,8 @@ function renderSubtabs(){
     const reviewed=d.cancelled?.reviewed||[];
     if(!['pending','reviewed'].includes(state.subtab))state.subtab='pending';
     $('subtabs').innerHTML=[
-      `<button class="subtab ${state.subtab==='pending'?'active':''}" data-subtab="pending">A analisar (${pending.length})</button>`,
-      `<button class="subtab ${state.subtab==='reviewed'?'active':''}" data-subtab="reviewed">Analisados (${reviewed.length})</button>`
+      `<button class="subtab ${state.subtab==='pending'?'active':''}" data-subtab="pending">Analisar (${pending.length})</button>`,
+      `<button class="subtab ${state.subtab==='reviewed'?'active':''}" data-subtab="reviewed">Conferidos (${reviewed.length})</button>`
     ].join('');
   }else{
     const statuses=[...new Set(d.errors.map(x=>x.status||'erro'))].sort();
@@ -384,7 +384,7 @@ function renderTable(){
     const sourceLists={scheduled:d.origin.scheduled||[],valid:d.origin.valid||[],needs_adjustment:d.origin.needs_adjustment||[],do_not_export:d.origin.do_not_export||[]};
     const list=(sourceLists[state.subtab]||sourceLists.valid).filter(matches).filter(matchesFilters);
     const page=visibleList(list);
-    $('tableWrap').innerHTML=table(['Pedido','Data','Recebido/Enviado','Cliente','Ecommerce','Situação','Envio / Rastreio','Itens','Motivos'],page.items.map(x=>`
+    $('tableWrap').innerHTML=table(['Pedido','Data','Recebido/Enviar','Cliente','Ecommerce','Situação','Envio / Rastreio','Itens','Motivos'],page.items.map(x=>`
       <tr data-a="${esc(x.venda_a_id)}">
         <td>${erpLink(x.venda_a_id,`<strong>${esc(x.numero||x.venda_a_id)}</strong><div class="small mono">ID A ${esc(x.venda_a_id)}</div>`)}</td>
         <td>${esc(dateOnly(x.data))}</td>
@@ -495,7 +495,7 @@ async function confirmDivergenceSync(){
 async function confirmCancelledReview(){
   const ids=[...state.selectedCancelled];
   if(!ids.length)return;
-  if(!confirm(`${ids.length} pedido(s) devem ser enviados para Analisados?`))return;
+  if(!confirm(`${ids.length} pedido(s) devem ser enviados para Conferidos?`))return;
   const res=await fetch('/admin/orders-panel/cancelled/mark-reviewed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({venda_a_ids:ids})});
   if(!res.ok){alert('Não foi possível confirmar a análise.');return}
   state.selectedCancelled.clear();

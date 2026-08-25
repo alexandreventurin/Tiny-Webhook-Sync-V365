@@ -3,9 +3,12 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from urllib.parse import quote
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from app.db import (
+    MAX_ATTEMPTS,
     fetch_and_lock_jobs,
     update_job_done,
     update_job_failed,
@@ -33,7 +36,21 @@ from app.db import (
     update_orders_map_sync,
     update_job_waiting_sku,
     upsert_partial_product,
+    upsert_cancelled_order_review,
     get_pool,
+    job_exists,
+    get_contact_mapping,
+    save_contact_mapping,
+    remove_contact_mapping,
+)
+from app.contact_sync import (
+    build_contact_payload,
+    choose_exact_contact,
+    contact_fingerprint,
+    extract_source_order_date,
+    normalize_tax_id,
+    numeric_id,
+    source_is_older,
 )
 from app.settings import (
     ENABLE_FETCH_A, EXECUTE_TINY_C, 
@@ -46,7 +63,17 @@ from app.utils import normalize_status
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-WORKER_BUILD = "2026-03-19-001"
+WORKER_BUILD = "2026-07-16-contact-map-001"
+APP_TZ = ZoneInfo("America/Sao_Paulo")
+REJUDERME_TRACKING_PAGE = os.getenv(
+    "REJUDERME_TRACKING_PAGE",
+    "https://rejuderme.com.br/pages/rastreio",
+).rstrip("?")
+
+
+def rejuderme_tracking_url(codigo_rastreio: str | None) -> str:
+    code = str(codigo_rastreio or "").strip()
+    return f"{REJUDERME_TRACKING_PAGE}?code={quote(code, safe='')}" if code else REJUDERME_TRACKING_PAGE
 
 _rate_limit_cooldown_until: dict[str, float] = {}
 RATE_LIMIT_RESERVE = 8  # stop when remaining <= this (1 order = ~6-7 API calls)
@@ -111,6 +138,123 @@ async def refresh_order_c_snapshot(client_c: TinyClient, venda_c_id: str, accoun
         await upsert_orders_c_fetch_error(str(venda_c_id), None, str(exc))
         logger.warning(f"Failed to refresh C snapshot for order {venda_c_id}: {exc}")
     return None
+
+
+async def refresh_order_a_snapshot(client_a: TinyClient, venda_a_id: str, account: str = "A") -> dict | None:
+    try:
+        details = await call_tiny(account, client_a, "get_order_details", str(venda_a_id))
+        await upsert_orders_a_fetched(str(venda_a_id), details)
+        return details
+    except TinyApiError as exc:
+        await upsert_orders_a_fetch_error(str(venda_a_id), exc.status_code, exc.body)
+        logger.warning(f"Failed to refresh A snapshot for order {venda_a_id}: {exc.body[:160]}")
+    except RateLimitError as exc:
+        await upsert_orders_a_fetch_error(str(venda_a_id), exc.status_code, str(exc))
+        logger.warning(f"Skipped A snapshot refresh for order {venda_a_id}: rate limit")
+    except Exception as exc:
+        await upsert_orders_a_fetch_error(str(venda_a_id), None, str(exc))
+        logger.warning(f"Failed to refresh A snapshot for order {venda_a_id}: {exc}")
+    return None
+
+
+def _json_lookup(data, *keys):
+    if not isinstance(data, dict):
+        return None
+    candidates = [data]
+    if isinstance(data.get("dados"), dict):
+        candidates.append(data["dados"])
+    if isinstance(data.get("notaFiscal"), dict):
+        candidates.append(data["notaFiscal"])
+    if isinstance(data.get("nota_fiscal"), dict):
+        candidates.append(data["nota_fiscal"])
+    for candidate in candidates:
+        for key in keys:
+            value = candidate.get(key)
+            if value not in (None, ""):
+                return value
+    return None
+
+
+async def sync_nf_observations_from_c(client_a: TinyClient, client_c: TinyClient, venda_a_id: str, venda_c_id: str, c_details: dict | None = None, id_nota_fiscal: str | None = None) -> dict:
+    c_details = c_details or await refresh_order_c_snapshot(client_c, venda_c_id) or {}
+    nf_id = id_nota_fiscal or _json_lookup(c_details, "idNotaFiscal", "id_nota_fiscal", "idNotaFiscalTiny", "id_nota_fiscal_tiny")
+
+    nf_payload = {}
+    if nf_id:
+        try:
+            nf_payload = await call_tiny("B", client_c, "get_nota_fiscal", str(nf_id))
+        except Exception as exc:
+            logger.warning(f"Could not fetch NF {nf_id} from C:{venda_c_id}: {exc}")
+
+    nf_numero = str(_json_lookup(nf_payload, "numero") or _json_lookup(c_details, "numeroNotaFiscal", "numero_nota_fiscal", "nfNumero") or "")
+    nf_serie = str(_json_lookup(nf_payload, "serie") or _json_lookup(c_details, "serieNotaFiscal", "serie_nota_fiscal") or "")
+    nf_chave_acesso = _json_lookup(nf_payload, "chaveAcesso", "chave_acesso", "chave") or _json_lookup(c_details, "chaveAcesso", "chave_acesso")
+    nf_protocolo = _json_lookup(nf_payload, "protocolo", "protocoloAutorizacao", "protocolo_autorizacao") or ""
+    nf_data_autorizacao = _json_lookup(nf_payload, "dataAutorizacao", "data_autorizacao") or ""
+
+    if not nf_numero and not nf_chave_acesso:
+        return {"updated": False, "reason": "nf_data_not_found", "id_nota_fiscal": str(nf_id or "")}
+
+    order_a = await call_tiny("A", client_a, "get_order_details", venda_a_id)
+    obs_atual = order_a.get("observacoes") or ""
+    nf_block_lines = [f"NF {nf_numero} - {nf_serie} | CHAVE DE ACESSO", nf_chave_acesso or ""]
+    if nf_protocolo or nf_data_autorizacao:
+        nf_block_lines.append("PROTOCOLO DE AUTORIZACAO DE USO")
+        nf_block_lines.append(f"{nf_protocolo} - {nf_data_autorizacao}".strip(" -"))
+    nf_block = "\n".join([line for line in nf_block_lines if line is not None])
+
+    if nf_chave_acesso and nf_chave_acesso in obs_atual:
+        await upsert_orders_a_fetched(str(venda_a_id), order_a)
+        return {"updated": False, "reason": "nf_already_in_obs", "nf_numero": nf_numero}
+
+    nova_obs = obs_atual.rstrip() + "\n\n" + nf_block if obs_atual.strip() else nf_block
+    await call_tiny("A", client_a, "update_order", venda_a_id, {"observacoes": nova_obs})
+    refreshed_a = await call_tiny("A", client_a, "get_order_details", venda_a_id)
+    await upsert_orders_a_fetched(str(venda_a_id), refreshed_a)
+    return {
+        "updated": True,
+        "id_nota_fiscal": str(nf_id or ""),
+        "nf_numero": nf_numero,
+        "nf_serie": nf_serie,
+        "nf_chave_acesso": (nf_chave_acesso[:20] + "...") if nf_chave_acesso and len(nf_chave_acesso) > 20 else nf_chave_acesso,
+    }
+
+
+async def sync_tracking_from_c_to_a(client_a: TinyClient, client_c: TinyClient, venda_a_id: str, venda_c_id: str, c_details: dict | None = None) -> dict:
+    c_details = c_details or await refresh_order_c_snapshot(client_c, venda_c_id) or {}
+    transportador_c = (c_details.get("transportador") or {}) if isinstance(c_details, dict) else {}
+    codigo_rastreio = (transportador_c.get("codigoRastreamento") or "").strip()
+    url_rastreio_c = (transportador_c.get("urlRastreamento") or "").strip()
+    url_rastreio = rejuderme_tracking_url(codigo_rastreio) if codigo_rastreio else url_rastreio_c
+
+    if not codigo_rastreio and not url_rastreio:
+        return {
+            "updated": False,
+            "reason": "tracking_not_found",
+            "venda_c_id": str(venda_c_id),
+            "venda_a_id": str(venda_a_id),
+        }
+
+    try:
+        await call_tiny("A", client_a, "update_order_despacho", str(venda_a_id), codigo_rastreio, url_rastreio)
+    except TinyApiError as exc:
+        if exc.status_code == 400 and "expedi" in (exc.body or "").lower():
+            return {
+                "updated": False,
+                "reason": "a_has_expedicao",
+                "venda_c_id": str(venda_c_id),
+                "venda_a_id": str(venda_a_id),
+                "error_body": exc.body[:200],
+            }
+        raise
+
+    return {
+        "updated": True,
+        "venda_c_id": str(venda_c_id),
+        "venda_a_id": str(venda_a_id),
+        "codigo_rastreamento": codigo_rastreio or None,
+        "url_rastreamento": url_rastreio or None,
+    }
 
 
 PRODUTO_ID_MAP: dict[int, int] = {}
@@ -370,6 +514,149 @@ def _source_address(payload: dict) -> dict:
     return address if isinstance(address, dict) else {}
 
 
+async def _resolve_contact_for_order(client_c: TinyClient, order_data: dict, venda_a_id: str) -> dict:
+    """Resolve the C contact with a local map and only call Tiny when data changed."""
+    cliente = order_data.get("cliente") if isinstance(order_data.get("cliente"), dict) else {}
+    endereco = _source_address(order_data)
+    contact_payload = build_contact_payload(cliente, endereco)
+    cpf_normalized = normalize_tax_id(contact_payload.get("cpfCnpj"))
+    if not cpf_normalized:
+        raise RuntimeError("contact_missing_cpf_cnpj")
+
+    contato_a_id = numeric_id(cliente.get("id"))
+    source_order_a_id = numeric_id(venda_a_id)
+    source_order_date = extract_source_order_date(order_data)
+    fingerprint = contact_fingerprint(contact_payload)
+    mapping = await get_contact_mapping(cpf_normalized, contato_a_id)
+    recovered_mapping = False
+
+    if mapping:
+        contato_c_id = numeric_id(mapping.get("contato_c_id"))
+        if contato_c_id is None:
+            await remove_contact_mapping(int(mapping["id"]))
+            mapping = None
+            recovered_mapping = True
+        elif source_is_older(mapping, source_order_date, source_order_a_id):
+            logger.info(
+                f"Contact C:{contato_c_id} reused for A order {venda_a_id}; "
+                "older order cannot overwrite newer contact data"
+            )
+            return {
+                "id": str(contato_c_id),
+                "created": False,
+                "updated": False,
+                "resolution": "mapped_older_order_reused",
+                "lookup_skipped": True,
+                "update_skipped": True,
+                "duplicate_matches": 0,
+            }
+        elif mapping.get("source_fingerprint") == fingerprint:
+            await save_contact_mapping(
+                mapping_id=int(mapping["id"]),
+                cpf_cnpj_normalized=cpf_normalized,
+                contato_a_id=contato_a_id,
+                contato_c_id=contato_c_id,
+                source_fingerprint=fingerprint,
+                source_order_a_id=source_order_a_id,
+                source_order_date=source_order_date,
+                confirmed=False,
+            )
+            logger.info(f"Contact C:{contato_c_id} reused without Tiny contact calls for A order {venda_a_id}")
+            return {
+                "id": str(contato_c_id),
+                "created": False,
+                "updated": False,
+                "resolution": "mapped_unchanged",
+                "lookup_skipped": True,
+                "update_skipped": True,
+                "duplicate_matches": 0,
+            }
+        else:
+            try:
+                await call_tiny("B", client_c, "update_contact", str(contato_c_id), contact_payload)
+            except TinyApiError as exc:
+                if exc.status_code != 404:
+                    raise
+                await remove_contact_mapping(int(mapping["id"]))
+                mapping = None
+                recovered_mapping = True
+                logger.warning(f"Contact mapping pointed to missing C:{contato_c_id}; rebuilding mapping")
+            else:
+                await save_contact_mapping(
+                    mapping_id=int(mapping["id"]),
+                    cpf_cnpj_normalized=cpf_normalized,
+                    contato_a_id=contato_a_id,
+                    contato_c_id=contato_c_id,
+                    source_fingerprint=fingerprint,
+                    source_order_a_id=source_order_a_id,
+                    source_order_date=source_order_date,
+                    confirmed=True,
+                )
+                logger.info(f"Contact C:{contato_c_id} updated because source data changed")
+                return {
+                    "id": str(contato_c_id),
+                    "created": False,
+                    "updated": True,
+                    "resolution": "mapped_updated",
+                    "lookup_skipped": True,
+                    "update_skipped": False,
+                    "duplicate_matches": 0,
+                }
+
+    contacts = await call_tiny("B", client_c, "search_contacts", contact_payload["cpfCnpj"])
+    matched_contact, duplicate_matches = choose_exact_contact(contacts, cpf_normalized)
+    if duplicate_matches > 1:
+        duplicate_ids = [
+            numeric_id(contact.get("id"))
+            for contact in contacts
+            if normalize_tax_id(contact.get("cpfCnpj") or contact.get("cpf_cnpj")) == cpf_normalized
+        ]
+        logger.warning(f"Multiple contacts in C share the same CPF/CNPJ; using oldest id from {duplicate_ids}")
+
+    contact_created = False
+    contact_updated = False
+    update_skipped = False
+    if matched_contact:
+        contato_c_id = numeric_id(matched_contact.get("id"))
+        remote_payload = build_contact_payload(matched_contact, matched_contact.get("endereco") or {})
+        if contact_fingerprint(remote_payload) == fingerprint:
+            update_skipped = True
+            resolution = "searched_unchanged"
+        else:
+            await call_tiny("B", client_c, "update_contact", str(contato_c_id), contact_payload)
+            contact_updated = True
+            resolution = "searched_updated"
+    else:
+        created_contact = await call_tiny("B", client_c, "create_contact", contact_payload)
+        contato_c_id = numeric_id(created_contact.get("id"))
+        contact_created = True
+        resolution = "searched_created"
+
+    if contato_c_id is None:
+        raise RuntimeError("contact_c_id_missing_after_resolution")
+
+    await save_contact_mapping(
+        mapping_id=None,
+        cpf_cnpj_normalized=cpf_normalized,
+        contato_a_id=contato_a_id,
+        contato_c_id=contato_c_id,
+        source_fingerprint=fingerprint,
+        source_order_a_id=source_order_a_id,
+        source_order_date=source_order_date,
+        confirmed=True,
+    )
+    logger.info(f"Contact C:{contato_c_id} resolved via Tiny lookup for A order {venda_a_id}")
+    return {
+        "id": str(contato_c_id),
+        "created": contact_created,
+        "updated": contact_updated,
+        "resolution": f"recovered_{resolution}" if recovered_mapping else resolution,
+        "lookup_skipped": False,
+        "update_skipped": update_skipped,
+        "duplicate_matches": duplicate_matches,
+    }
+
+
 def _source_transportador(payload: dict) -> dict:
     transportador = payload.get("transportador") if isinstance(payload.get("transportador"), dict) else {}
     return transportador if isinstance(transportador, dict) else {}
@@ -449,6 +736,248 @@ def _build_field_update_payload(source_payload: dict, field_keys: list[str], tar
     return update_payload, applied, unsupported
 
 
+def _extract_list_items(data: dict) -> list[dict]:
+    if not isinstance(data, dict):
+        return []
+    items = data.get("itens")
+    return items if isinstance(items, list) else []
+
+
+def _order_has_marker(item: dict, marker: str) -> bool:
+    marker_norm = str(marker or "").strip().lower()
+    values: list[str] = []
+    for key in ("marcadores", "tags"):
+        raw = item.get(key)
+        if isinstance(raw, list):
+            for entry in raw:
+                if isinstance(entry, dict):
+                    values.extend(str(entry.get(k, "")) for k in ("descricao", "nome", "tag") if entry.get(k))
+                elif entry:
+                    values.append(str(entry))
+        elif raw:
+            values.append(str(raw))
+    return any(marker_norm == value.strip().lower() for value in values)
+
+
+def _order_date_from_item(item: dict) -> datetime | None:
+    for key in ("data", "dataPedido", "dataCriacao", "createdAt"):
+        raw = item.get(key)
+        if not raw:
+            continue
+        text = str(raw).strip()
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+            try:
+                parsed = datetime.strptime(text[:19], fmt)
+                return parsed.replace(tzinfo=APP_TZ)
+            except ValueError:
+                pass
+    return None
+
+
+def _approval_target_for_local(local_base: datetime) -> datetime:
+    target_date = local_base.date()
+    business_days = 0
+    while business_days < 2:
+        target_date = target_date + timedelta(days=1)
+        if target_date.weekday() != 6:
+            business_days += 1
+    return datetime(target_date.year, target_date.month, target_date.day, 1, 0, tzinfo=APP_TZ)
+
+
+async def run_sweep_origin_exports_job(job_id: str, attempts: int, payload: dict) -> None:
+    days = int(payload.get("days") or 7)
+    today = datetime.now(APP_TZ).date()
+    data_inicial = (today - timedelta(days=days)).isoformat()
+    data_final = today.isoformat()
+    token_a = await ensure_access_token("A")
+    if not token_a:
+        raise RuntimeError("No valid OAuth token for A")
+
+    client_a = TinyClient(token_a)
+    p = await get_pool()
+    queued_create = 0
+    queued_approve = 0
+    skipped_mapped = 0
+    skipped_tagged = 0
+    scanned = 0
+    now_local = datetime.now(APP_TZ)
+
+    async with p.acquire() as conn:
+        for status_name, status_code in (("em_aberto", 0), ("aprovado", 3)):
+            offset = 0
+            while True:
+                data = await call_tiny("A", client_a, "list_orders", data_inicial, data_final, 100, offset, status_code)
+                items = _extract_list_items(data)
+                if not items:
+                    break
+                ids = [str(item.get("id")) for item in items if isinstance(item, dict) and item.get("id")]
+                mapped_rows = await conn.fetch("""
+                    SELECT venda_a_id::text AS venda_a_id
+                    FROM public.orders_map
+                    WHERE venda_a_id::text = ANY($1::text[])
+                """, ids) if ids else []
+                mapped_ids = {str(row["venda_a_id"]) for row in mapped_rows}
+
+                for item in items:
+                    if not isinstance(item, dict) or not item.get("id"):
+                        continue
+                    scanned += 1
+                    venda_a_id = str(item.get("id"))
+                    if venda_a_id in mapped_ids:
+                        skipped_mapped += 1
+                        continue
+                    if _order_has_marker(item, "v365"):
+                        skipped_tagged += 1
+                        continue
+
+                    webhook_payload = dict(item)
+                    webhook_payload["__source"] = "daily_sweep_origin_exports"
+                    webhook_payload["__synced_at"] = datetime.now(timezone.utc).isoformat()
+                    await upsert_orders_a_snapshot(venda_a_id, webhook_payload)
+
+                    if status_name == "aprovado":
+                        created = await insert_job(
+                            job_type="create_order_c",
+                            dedupe_key=f"A:vendas:{venda_a_id}:create_order_c",
+                            event_id=None,
+                            payload={"source": "A", "topic": "vendas", "venda_id": venda_a_id, "codigo_situacao": "aprovado", "__source": "daily_sweep_origin_exports"},
+                        )
+                        queued_create += 1 if created else 0
+                    else:
+                        order_dt = _order_date_from_item(item)
+                        if order_dt and _approval_target_for_local(order_dt.astimezone(APP_TZ)) <= now_local:
+                            created = await insert_job(
+                                job_type="approve_order_a",
+                                dedupe_key=f"A:vendas:{venda_a_id}:approve_order_a",
+                                event_id=None,
+                                payload={"source": "A", "topic": "vendas", "venda_id": venda_a_id, "codigo_situacao": "em_aberto", "__source": "daily_sweep_origin_exports"},
+                            )
+                            queued_approve += 1 if created else 0
+
+                offset += len(items)
+                if len(items) < 100:
+                    break
+
+    await update_job_done(job_id, {
+        "would": "sweep_origin_exports",
+        "done": True,
+        "days": days,
+        "data_inicial": data_inicial,
+        "data_final": data_final,
+        "scanned": scanned,
+        "skipped_mapped": skipped_mapped,
+        "skipped_tagged_v365": skipped_tagged,
+        "queued_create_order_c": queued_create,
+        "queued_approve_order_a": queued_approve,
+    })
+
+
+async def run_reconcile_recent_statuses_job(job_id: str, attempts: int, payload: dict) -> None:
+    days = int(payload.get("days") or 5)
+    today = datetime.now(APP_TZ).date()
+    data_inicial = (today - timedelta(days=days)).isoformat()
+    data_final = today.isoformat()
+    status_codes = {"cancelado": 2, "enviado": 5, "entregue": 6, "nao_entregue": 9}
+    tokens = {"A": await ensure_access_token("A"), "B": await ensure_access_token("B")}
+    if not tokens["A"] or not tokens["B"]:
+        raise RuntimeError("Missing Tiny token for A or B")
+
+    clients = {"A": TinyClient(tokens["A"]), "B": TinyClient(tokens["B"])}
+    remote_statuses: dict[str, dict[str, str]] = {"A": {}, "B": {}}
+    queued = 0
+    reviews = 0
+    scanned = 0
+    confirmed_aligned = 0
+    unmapped = 0
+
+    for account in ("A", "B"):
+        for status_name, status_code in status_codes.items():
+            offset = 0
+            while True:
+                data = await call_tiny(account, clients[account], "list_orders", data_inicial, data_final, 100, offset, status_code)
+                items = _extract_list_items(data)
+                if not items:
+                    break
+                for item in items:
+                    if not isinstance(item, dict) or not item.get("id"):
+                        continue
+                    scanned += 1
+                    remote_statuses[account][str(item.get("id"))] = status_name
+                offset += len(items)
+                if len(items) < 100:
+                    break
+
+    a_ids = list(remote_statuses["A"].keys())
+    c_ids = list(remote_statuses["B"].keys())
+    p = await get_pool()
+    async with p.acquire() as conn:
+        mappings = await conn.fetch("""
+            SELECT venda_a_id::text AS venda_a_id,
+                   venda_c_id::text AS venda_c_id
+            FROM public.orders_map
+            WHERE venda_c_id IS NOT NULL
+              AND (
+                  venda_a_id::text = ANY($1::text[])
+                  OR venda_c_id::text = ANY($2::text[])
+              )
+        """, a_ids, c_ids)
+
+    mapped_a_ids = {str(row["venda_a_id"]) for row in mappings}
+    mapped_c_ids = {str(row["venda_c_id"]) for row in mappings}
+    unmapped = len(set(a_ids) - mapped_a_ids) + len(set(c_ids) - mapped_c_ids)
+
+    for mapping in mappings:
+        venda_a_id = str(mapping["venda_a_id"])
+        venda_c_id = str(mapping["venda_c_id"])
+        status_a = remote_statuses["A"].get(venda_a_id)
+        status_c = remote_statuses["B"].get(venda_c_id)
+
+        # Cancelamento manual em A nunca altera C. Se C também estiver cancelado,
+        # a situação já está alinhada e não caracteriza pendência para revisão.
+        if status_a == "cancelado":
+            if status_c != "cancelado":
+                await upsert_cancelled_order_review(venda_a_id)
+                reviews += 1
+            if status_c == "cancelado":
+                await update_orders_map_sync(venda_a_id, venda_c_id, "cancelado")
+                confirmed_aligned += 1
+            continue
+
+        # Para estes estados, C é a origem da verdade e somente C pode atualizar A.
+        if status_c in status_codes:
+            if status_a == status_c:
+                await update_orders_map_sync(venda_a_id, venda_c_id, status_c)
+                confirmed_aligned += 1
+                continue
+
+            created = await insert_job(
+                job_type="sync_status",
+                dedupe_key=f"system:reconcile:{today.isoformat()}:B:{venda_c_id}:sync_status:{status_c}",
+                event_id=None,
+                payload={
+                    "source": "B",
+                    "topic": "vendas",
+                    "venda_id": venda_c_id,
+                    "codigo_situacao": status_c,
+                    "__source": "daily_reconcile_statuses",
+                },
+            )
+            queued += 1 if created else 0
+
+    await update_job_done(job_id, {
+        "would": "reconcile_recent_statuses",
+        "done": True,
+        "days": days,
+        "data_inicial": data_inicial,
+        "data_final": data_final,
+        "scanned": scanned,
+        "queued_sync_status": queued,
+        "cancel_reviews_added": reviews,
+        "confirmed_aligned": confirmed_aligned,
+        "unmapped_relevant_orders": unmapped,
+    })
+
+
 async def process_job(job: dict) -> None:
     job_id = job['id']
     job_type = job['job_type']
@@ -470,6 +999,14 @@ async def process_job(job: dict) -> None:
     topic = payload.get('topic')
     
     try:
+        if job_type == 'sweep_origin_exports':
+            await run_sweep_origin_exports_job(job_id, attempts, payload)
+            return
+
+        if job_type == 'reconcile_recent_statuses':
+            await run_reconcile_recent_statuses_job(job_id, attempts, payload)
+            return
+
         if job_type == 'approve_order_a':
             if not await get_feature_flag("auto_approve_open_orders"):
                 action_preview = {"would": "approve_order_a", "skipped": True, "reason": "auto_approve_open_orders flag disabled"}
@@ -538,7 +1075,7 @@ async def process_job(job: dict) -> None:
                 await update_job_failed(job_id, "missing_venda_id", attempts)
                 logger.warning(f"Job {job_id} failed: missing_venda_id")
                 return
-            
+
             max_orders = int(os.getenv("MAX_ORDERS_TO_REPLICATE", "0"))
             if max_orders > 0:
                 current_count = await count_orders_replicated_to_c()
@@ -628,7 +1165,7 @@ async def process_job(job: dict) -> None:
                     "venda_a_id": venda_id,
                     "external_key": external_key,
                     "dry_run": True,
-                    "has_fetched_payload": fetched_payload is not None,
+                    "has_fetched_payload": bool(order_data),
                     "cliente_nome": cliente.get('nome'),
                     "cpf_cnpj": cpf_cnpj,
                     "itens_count": len(itens_a),
@@ -643,73 +1180,24 @@ async def process_job(job: dict) -> None:
                 await update_job_failed(job_id, f"missing_required_fields: {missing_fields}", attempts)
                 logger.warning(f"Job {job_id} failed: missing required fields {missing_fields}")
                 return
-            
-            token_c = await ensure_access_token("B")
-            if not token_c:
-                await update_job_failed(job_id, "No valid OAuth token for account B", attempts)
-                logger.warning(f"Job {job_id} failed: No OAuth token for B")
-                return
-            
-            client_c = TinyClient(token_c)
-            
-            id_contato_c = None
-            contact_created = False
-            contact_updated = False
-            nome_raw = cliente.get('nome') or ''
-            nome_truncado = nome_raw[:50] if len(nome_raw) > 50 else nome_raw
-            if len(nome_raw) > 50:
-                logger.warning(f"Job {job_id}: nome do contato truncado de {len(nome_raw)} para 50 chars: '{nome_raw}' -> '{nome_truncado}'")
-            contact_payload = {
-                "nome": nome_truncado,
-                "cpfCnpj": cpf_cnpj,
-                "tipoPessoa": cliente.get('tipoPessoa') or ('J' if len(cpf_cnpj.replace('.','').replace('-','').replace('/','')) > 11 else 'F'),
-                "email": cliente.get('email'),
-                "telefone": cliente.get('telefone') or cliente.get('fone'),
-                "celular": cliente.get('celular'),
-                "endereco": {
-                    "endereco": endereco.get('endereco') or endereco.get('logradouro'),
-                    "numero": endereco.get('enderecoNro') or endereco.get('numero'),
-                    "complemento": endereco.get('complemento'),
-                    "bairro": endereco.get('bairro'),
-                    "municipio": endereco.get('municipio') or endereco.get('cidade'),
-                    "cep": endereco.get('cep'),
-                    "uf": endereco.get('uf')
+
+            status_a_normalized = normalize_status(order_data.get('situacao'))
+            if status_a_normalized != "aprovado":
+                action_preview = {
+                    "would": "create_order_in_C",
+                    "skipped": True,
+                    "reason": "status_not_approved",
+                    "venda_a_id": venda_id,
+                    "current_status": status_a_normalized,
                 }
-            }
-            contact_payload = {k: v for k, v in contact_payload.items() if v is not None}
-            if contact_payload.get('endereco'):
-                contact_payload['endereco'] = {k: v for k, v in contact_payload['endereco'].items() if v is not None}
+                await update_job_done(job_id, action_preview)
+                logger.info(
+                    f"Job {job_id} skipped: A:{venda_id} is {status_a_normalized or 'unknown'}, not aprovado"
+                )
+                return
 
-            try:
-                contacts = await call_tiny("B", client_c, "search_contacts", cpf_cnpj)
-                if contacts:
-                    id_contato_c = contacts[0].get('id')
-                    logger.info(f"Found existing contact in B: {id_contato_c}")
-            except TinyApiError as e:
-                logger.warning(f"Error searching contacts: {e}")
-            
-            if id_contato_c:
-                try:
-                    await call_tiny("B", client_c, "update_contact", str(id_contato_c), contact_payload)
-                    contact_updated = True
-                    logger.info(f"Updated contact in B with delivery address: {id_contato_c}")
-                except TinyApiError as e:
-                    await update_job_failed(job_id, f"Failed to update contact: {e.status_code} {e.body}", attempts)
-                    logger.error(f"Job {job_id} failed to update contact {id_contato_c}: {e}")
-                    return
-            else:
-                try:
-                    contact_result = await call_tiny("B", client_c, "create_contact", contact_payload)
-                    id_contato_c = contact_result.get('id')
-                    contact_created = True
-                    logger.info(f"Created contact in B: {id_contato_c}")
-                except TinyApiError as e:
-                    await update_job_failed(job_id, f"Failed to create contact: {e.status_code} {e.body}", attempts)
-                    logger.error(f"Job {job_id} failed to create contact: {e}")
-                    return
-            
+            # Resolve product mappings before consuming C API calls on contacts.
             itens_c, missing_skus = await build_itens_dest_v3(itens_a)
-
             if missing_skus:
                 for pid, sku in missing_skus:
                     await upsert_partial_product(pid, sku)
@@ -727,6 +1215,23 @@ async def process_job(job: dict) -> None:
                 await update_job_failed(job_id, "No products mapped from A to B (check products_map table)", attempts)
                 logger.warning(f"Job {job_id} failed: no products mapped")
                 return
+
+            token_c = await ensure_access_token("B")
+            if not token_c:
+                await update_job_failed(job_id, "No valid OAuth token for account B", attempts)
+                logger.warning(f"Job {job_id} failed: No OAuth token for B")
+                return
+
+            client_c = TinyClient(token_c)
+
+            nome_raw = cliente.get('nome') or ''
+            if len(nome_raw) > 50:
+                logger.warning(f"Job {job_id}: contact name truncated from {len(nome_raw)} to 50 characters")
+
+            contact_resolution = await _resolve_contact_for_order(client_c, order_data, str(venda_id))
+            id_contato_c = contact_resolution["id"]
+            contact_created = contact_resolution["created"]
+            contact_updated = contact_resolution["updated"]
             
             endereco_entrega = {
                 "endereco": endereco.get('endereco') or endereco.get('logradouro'),
@@ -764,8 +1269,6 @@ async def process_job(job: dict) -> None:
             if forma_frete_src:
                 obs_extra += f" | Frete: {forma_frete_src}"
             obs_extra += "]"
-            status_a_normalized = normalize_status(order_data.get('situacao'))
-            
             # numeroOrdemCompra recebe o numeroPedidoEcommerce de A (número da Shopify).
             # Se não houver, fica vazio — para tornar perceptível visualmente quando algo
             # deu errado (não fazemos fallback para numeroPedido).
@@ -876,6 +1379,10 @@ async def process_job(job: dict) -> None:
                 "id_contato_c": id_contato_c,
                 "contact_created": contact_created,
                 "contact_updated": contact_updated,
+                "contact_resolution": contact_resolution["resolution"],
+                "contact_lookup_skipped": contact_resolution["lookup_skipped"],
+                "contact_update_skipped": contact_resolution["update_skipped"],
+                "contact_duplicate_matches": contact_resolution["duplicate_matches"],
                 "itens_mapped": len(itens_c),
                 "forma_envio_origem": forma_envio_src,
                 "forma_frete_origem": forma_frete_src,
@@ -898,8 +1405,11 @@ async def process_job(job: dict) -> None:
                 logger.warning(f"Job {job_id} failed: missing_venda_id")
                 return
             
-            webhook_payload_raw = payload.get('webhook_payload') or payload
-            await upsert_orders_a_snapshot(venda_a_id=str(venda_id), webhook_payload=webhook_payload_raw)
+            refresh_only = bool(payload.get('refresh_only'))
+            force_refresh = bool(payload.get('force_refresh'))
+            webhook_payload_raw = payload.get('webhook_payload')
+            if webhook_payload_raw:
+                await upsert_orders_a_snapshot(venda_a_id=str(venda_id), webhook_payload=webhook_payload_raw)
             
             if not ENABLE_FETCH_A:
                 action_preview = {
@@ -923,7 +1433,7 @@ async def process_job(job: dict) -> None:
                 logger.info(f"Job {job_id} skipped: venda_id not in allowlist")
                 return
             
-            fetched_at = await get_snapshot_fetched_at(str(venda_id))
+            fetched_at = None if force_refresh else await get_snapshot_fetched_at(str(venda_id))
             if fetched_at:
                 age_minutes = (datetime.now(timezone.utc) - fetched_at).total_seconds() / 60
                 if age_minutes < FETCH_CACHE_MINUTES:
@@ -935,6 +1445,8 @@ async def process_job(job: dict) -> None:
                     }
                     await update_job_done(job_id, action_preview)
                     logger.info(f"Job {job_id} skipped: cached fetch")
+                    if refresh_only:
+                        return
                     create_order_dedupe_key = f"A:vendas:{venda_id}:create_order_c"
                     create_order_payload = {
                         "source": "A", "topic": "vendas", "venda_id": str(venda_id),
@@ -969,6 +1481,9 @@ async def process_job(job: dict) -> None:
             }
             await update_job_done(job_id, action_preview)
             logger.info(f"Job {job_id} completed: fetch_order_a for venda {venda_id}")
+
+            if refresh_only:
+                return
             
             create_order_dedupe_key = f"A:vendas:{venda_id}:create_order_c"
             create_order_payload = {
@@ -985,6 +1500,18 @@ async def process_job(job: dict) -> None:
             logger.info(f"Chained create_order_c job for venda {venda_id}")
         
         elif job_type == 'sync_status':
+            if source == "A" and codigo_situacao == "cancelado":
+                await upsert_cancelled_order_review(str(venda_id))
+                action_preview = {
+                    "would": "cancel_review",
+                    "skipped": True,
+                    "reason": "origin_cancellation_requires_review",
+                    "venda_a_id": str(venda_id),
+                }
+                await update_job_done(job_id, action_preview)
+                logger.info(f"Job {job_id} did not cancel C; A:{venda_id} sent to cancellation review")
+                return
+
             flag_key = f"sync_status_{codigo_situacao}" if codigo_situacao else None
             if flag_key and not await get_feature_flag(flag_key):
                 action_preview = {"would": "sync_status", "skipped": True, "reason": f"{flag_key} flag disabled", "situacao": codigo_situacao}
@@ -1057,12 +1584,32 @@ async def process_job(job: dict) -> None:
             client_target = TinyClient(target_token)
             
             await call_tiny(target_source, client_target, "update_order_status", target_id, situacao_int)
+            nf_sync_result = None
+            tracking_sync_result = None
             if target_source == "B":
                 await refresh_order_c_snapshot(client_target, target_id)
             elif source == "B":
                 source_token = await ensure_access_token("B")
                 if source_token:
-                    await refresh_order_c_snapshot(TinyClient(source_token), str(venda_id))
+                    client_source = TinyClient(source_token)
+                    c_details = await refresh_order_c_snapshot(client_source, str(venda_id))
+                    if codigo_situacao == "enviado":
+                        nf_sync_result = await sync_nf_observations_from_c(
+                            client_a=client_target,
+                            client_c=client_source,
+                            venda_a_id=target_id,
+                            venda_c_id=str(venda_id),
+                            c_details=c_details,
+                            id_nota_fiscal=id_nota_fiscal,
+                        )
+                        tracking_sync_result = await sync_tracking_from_c_to_a(
+                            client_a=client_target,
+                            client_c=client_source,
+                            venda_a_id=target_id,
+                            venda_c_id=str(venda_id),
+                            c_details=c_details,
+                        )
+                    await refresh_order_a_snapshot(client_target, target_id)
             
             if source == "A":
                 await update_orders_map_sync(str(venda_id), target_id, codigo_situacao)
@@ -1078,6 +1625,8 @@ async def process_job(job: dict) -> None:
                 "target_venda_id": target_id,
                 "situacao": codigo_situacao,
                 "situacao_code": situacao_int,
+                "nf_sync": nf_sync_result,
+                "tracking_sync": tracking_sync_result,
             }
             
             await update_job_done(job_id, action_preview)
@@ -1305,7 +1854,8 @@ async def process_job(job: dict) -> None:
             c_details = await refresh_order_c_snapshot(client_c, venda_c_id_str) or {}
             transportador_c = (c_details.get("transportador") or {}) if isinstance(c_details, dict) else {}
             codigo_rastreio = (transportador_c.get("codigoRastreamento") or "").strip()
-            url_rastreio = (transportador_c.get("urlRastreamento") or "").strip()
+            url_rastreio_c = (transportador_c.get("urlRastreamento") or "").strip()
+            url_rastreio = rejuderme_tracking_url(codigo_rastreio) if codigo_rastreio else url_rastreio_c
 
             if not codigo_rastreio:
                 # Delay progressivo: tentativas 0→1min, 1→1min, 2→1min, 3→2min, 4→3min
@@ -1509,7 +2059,9 @@ async def process_job(job: dict) -> None:
             if "situacao" in field_keys:
                 status_name = normalize_status(source_payload.get("situacao"))
                 status_code = status_code_by_name.get(status_name or "")
-                if status_code:
+                if source_account == "A" and target_account == "B" and status_name == "cancelado":
+                    unsupported_fields.append("situacao")
+                elif status_code:
                     await call_tiny(target_account, target_client, "update_order_status", target_id, status_code)
                     applied_fields.append("situacao")
                     await update_orders_map_sync(venda_a_id_str, venda_c_id_str, status_name)
@@ -1521,6 +2073,8 @@ async def process_job(job: dict) -> None:
                 codigo_rastreamento = (transportador.get("codigoRastreamento") or source_payload.get("codigoRastreamento") or "").strip()
                 url_rastreamento = (transportador.get("urlRastreamento") or source_payload.get("urlRastreamento") or "").strip()
                 if codigo_rastreamento:
+                    if target_account == "A":
+                        url_rastreamento = rejuderme_tracking_url(codigo_rastreamento)
                     await call_tiny(target_account, target_client, "update_order_despacho", target_id, codigo_rastreamento, url_rastreamento)
                     applied_fields.append("codigo_rastreamento")
                 else:
@@ -1587,7 +2141,15 @@ async def process_job(job: dict) -> None:
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Job {job_id} failed: {error_msg}")
-        await update_job_failed(job_id, error_msg, attempts)
+        if job_type in {"sweep_origin_exports", "reconcile_recent_statuses"} and attempts < MAX_ATTEMPTS:
+            delay_minutes = min(60, 5 * (2 ** max(0, attempts - 1)))
+            await reschedule_job_with_backoff(job_id, attempts, delay_minutes, error_msg)
+            logger.info(
+                f"System job {job_id} scheduled for retry {attempts + 1}/{MAX_ATTEMPTS} "
+                f"in {delay_minutes}min"
+            )
+        else:
+            await update_job_failed(job_id, error_msg, attempts)
 
 
 async def _requeue_remaining_jobs(jobs: list[dict], delay_minutes: int = 2):
@@ -1695,6 +2257,40 @@ async def maybe_refresh_tokens():
 _last_token_check = None
 _last_heartbeat = None
 _last_stale_lock_reset = None
+_last_origin_sweep_date = None
+_last_status_reconcile_date = None
+
+
+async def maybe_schedule_daily_system_jobs() -> None:
+    global _last_origin_sweep_date, _last_status_reconcile_date
+    local_now = datetime.now(APP_TZ)
+    today_key = local_now.date().isoformat()
+
+    if local_now.weekday() <= 5 and local_now.hour >= 6 and _last_origin_sweep_date != today_key:
+        dedupe_key = f"system:sweep_origin_exports:{today_key}"
+        created = await insert_job(
+            job_type="sweep_origin_exports",
+            dedupe_key=dedupe_key,
+            event_id=None,
+            payload={"source": "system", "topic": "daily_sweep", "days": 7},
+        )
+        if created or await job_exists(dedupe_key):
+            _last_origin_sweep_date = today_key
+        if created:
+            logger.info(f"Scheduled daily origin export sweep for {today_key}")
+
+    if local_now.hour >= 23 and _last_status_reconcile_date != today_key:
+        dedupe_key = f"system:reconcile_recent_statuses:{today_key}"
+        created = await insert_job(
+            job_type="reconcile_recent_statuses",
+            dedupe_key=dedupe_key,
+            event_id=None,
+            payload={"source": "system", "topic": "daily_reconcile", "days": 5},
+        )
+        if created or await job_exists(dedupe_key):
+            _last_status_reconcile_date = today_key
+        if created:
+            logger.info(f"Scheduled daily recent status reconcile for {today_key}")
 
 async def worker_loop():
     global worker_running, _last_token_check, _last_heartbeat, _last_stale_lock_reset
@@ -1720,6 +2316,11 @@ async def worker_loop():
         if _last_stale_lock_reset is None or (now - _last_stale_lock_reset).total_seconds() >= WORKER_STALE_LOCK_RESET_SECONDS:
             reset_locks = True
             _last_stale_lock_reset = now
+
+        try:
+            await maybe_schedule_daily_system_jobs()
+        except Exception as e:
+            logger.error(f"Daily system job scheduler failed: {e}")
 
         import time as _time
         max_cooldown = 0

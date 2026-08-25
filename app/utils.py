@@ -77,6 +77,20 @@ def normalize_status(codigo_situacao) -> str | None:
         return num_map.get(int(s))
     except (ValueError, TypeError):
         pass
+    aliases = {
+        "aberto": "em_aberto",
+        "aberta": "em_aberto",
+        "em_aberta": "em_aberto",
+        "faturada": "faturado",
+        "cancelada": "cancelado",
+        "aprovada": "aprovado",
+        "preparando_para_envio": "preparando_envio",
+        "enviada": "enviado",
+        "pronto_para_envio": "pronto_envio",
+        "nao_entregue": "nao_entregue",
+        "não_entregue": "nao_entregue",
+    }
+    s = aliases.get(s, s)
     return s if s else None
 
 
@@ -89,19 +103,17 @@ def determine_job_type(source: str, topic: str, codigo_situacao) -> str:
         if status == "aprovado":
             return "fetch_order_a"
         if status in ("cancelado",):
-            return "sync_status"
+            return "noop"
 
     if source == "B" and topic == "vendas":
-        if status == "pronto_envio":
-            return "sync_tracking_c_to_a"
-        if status in ("faturado", "cancelado", "enviado", "entregue", "nao_entregue"):
+        if status in ("cancelado", "enviado", "entregue", "nao_entregue"):
             return "sync_status"
-    
-    if source == "B" and topic == "notas":
-        if status == "faturado":
-            return "sync_status"
-    
-    if source == "B" and topic == "notas_fiscais":
-        return "sync_nf_link"
     
     return "noop"
+
+
+def is_approved_create_request(job_type: str, payload: dict | None) -> bool:
+    if job_type != "create_order_c" or not isinstance(payload, dict):
+        return False
+    status = payload.get("codigo_situacao") or payload.get("situacao")
+    return normalize_status(status) == "aprovado"

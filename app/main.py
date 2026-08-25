@@ -6,11 +6,13 @@ import hmac
 import html
 import logging
 import os
+import secrets
 import sys
 import time
 import urllib.parse
 from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
+from zoneinfo import ZoneInfo
 
 from pathlib import Path
 from fastapi import FastAPI, Request
@@ -18,8 +20,16 @@ from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, Redirect
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 
-APP_BUILD = "2026-02-05-001"
+APP_BUILD = "2026-08-25-revive-approved-create-001"
 SERVER_STARTED_AT = datetime.now(timezone.utc)
+APP_TZ = ZoneInfo("America/Sao_Paulo")
+ORIGIN_PANEL_CACHE_SECONDS = max(1, int(os.getenv("ORIGIN_PANEL_CACHE_SECONDS", "10")))
+_origin_panel_cache: dict = {"expires_at": 0.0, "items": None}
+
+
+def _invalidate_origin_panel_cache() -> None:
+    _origin_panel_cache["expires_at"] = 0.0
+    _origin_panel_cache["items"] = None
 
 from app.db import (
     init_db, close_db, insert_event, insert_job,
@@ -29,13 +39,15 @@ from app.db import (
     get_orders_a_list, get_order_a_snapshot, get_orders_map_list,
     check_is_echo, update_event_action_result,
     get_order_mapping_by_a, get_order_mapping_by_c,
-    upsert_cancelled_order_review, mark_cancelled_order_reviews
+    upsert_cancelled_order_review, mark_cancelled_order_reviews,
+    upsert_orders_a_snapshot
 )
 from app.schemas import (
     WebhookResponse, HealthResponse, JobsListResponse, JobItem, RunJobsResponse,
     OrderAItem, OrderAListResponse, OrderASnapshotResponse
 )
 from app.utils import generate_event_key, generate_dedupe_key, determine_job_type, normalize_status, to_int_or_none
+from app.order_comparison import normalize_shipping_label, select_delivery_address
 from app.worker import worker_loop, stop_worker, run_worker_once, run_worker_once_detailed, WORKER_BUILD
 
 
@@ -60,13 +72,16 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Tiny Webhooks Receiver", lifespan=lifespan)
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "adm.muybela")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Jesus!123456")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 ADMIN_SESSION_COOKIE = "tiny_admin_session"
 ADMIN_SESSION_MAX_AGE = int(os.getenv("ADMIN_SESSION_MAX_AGE", str(8 * 60 * 60)))
-ADMIN_SESSION_SECRET = os.getenv("ADMIN_SESSION_SECRET") or hashlib.sha256(
-    f"{ADMIN_USERNAME}:{ADMIN_PASSWORD}:{APP_BUILD}".encode("utf-8")
-).hexdigest()
+ADMIN_SESSION_SECRET = os.getenv("ADMIN_SESSION_SECRET") or secrets.token_urlsafe(48)
 PROTECTED_PATHS = ("/admin", "/dashboard", "/orders-panel", "/order-panel")
+
+if not ADMIN_PASSWORD:
+    logging.warning("ADMIN_PASSWORD is not configured; admin login is disabled")
+if not os.getenv("ADMIN_SESSION_SECRET"):
+    logging.warning("ADMIN_SESSION_SECRET is not configured; sessions will reset on restart")
 
 
 def _sign_session(message: str) -> str:
@@ -116,17 +131,30 @@ def _wants_html(request: Request) -> bool:
 
 def approval_delay_minutes(now: datetime | None = None) -> int:
     now = now or datetime.now(timezone.utc)
-    weekday = now.weekday()
-    if weekday <= 3:
-        days = 1
-    elif weekday == 4:
-        days = 3
-    elif weekday == 5:
-        days = 3
-    else:
-        days = 2
-    target = now + timedelta(days=days)
+    target = approval_target_at(now) or (now + timedelta(days=1))
     return max(1, int((target - now).total_seconds() // 60))
+
+
+def approval_target_at(base: datetime | None = None) -> datetime | None:
+    if base is None:
+        return None
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=timezone.utc)
+    local_base = base.astimezone(APP_TZ)
+    target_date = local_base.date()
+    business_days = 0
+    while business_days < 2:
+        target_date = target_date + timedelta(days=1)
+        if target_date.weekday() != 6:
+            business_days += 1
+    return datetime(
+        target_date.year,
+        target_date.month,
+        target_date.day,
+        1,
+        0,
+        tzinfo=APP_TZ,
+    ).astimezone(timezone.utc)
 
 
 @app.middleware("http")
@@ -190,7 +218,7 @@ async def login_submit(request: Request):
     next_url = form.get("next", ["/dashboard"])[0] or "/dashboard"
     if not next_url.startswith("/"):
         next_url = "/dashboard"
-    if hmac.compare_digest(username, ADMIN_USERNAME) and hmac.compare_digest(password, ADMIN_PASSWORD):
+    if ADMIN_PASSWORD and hmac.compare_digest(username, ADMIN_USERNAME) and hmac.compare_digest(password, ADMIN_PASSWORD):
         response = RedirectResponse(next_url, status_code=303)
         secure_cookie = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
         response.set_cookie(
@@ -268,6 +296,7 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
         venda_id_int = to_int_or_none(venda_id_raw)
         id_nota_fiscal_int = to_int_or_none(id_nota_fiscal_raw)
         codigo_situacao_str = str(codigo_situacao_raw).strip().lower() if codigo_situacao_raw not in (None, "") else None
+        situacao_normalizada = normalize_status(codigo_situacao_str)
         id_nota_fiscal_str = str(id_nota_fiscal_int) if id_nota_fiscal_int is not None else None
         
         payload_str = json.dumps(payload, sort_keys=True, ensure_ascii=False)
@@ -290,24 +319,56 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
             id_nota_fiscal=id_nota_fiscal_str,
             payload=payload_str
         )
+
+        if source == "A" and topic == "vendas" and venda_id_int:
+            snapshot_payload = dict(dados) if isinstance(dados, dict) else {}
+            snapshot_payload["situacao"] = situacao_normalizada or codigo_situacao_str
+            snapshot_payload["__source"] = "webhook"
+            snapshot_payload["__received_at"] = datetime.now(timezone.utc).isoformat()
+            await upsert_orders_a_snapshot(str(venda_id_int), snapshot_payload)
+            _invalidate_origin_panel_cache()
+
+            # Pedidos em aberto precisam ter os detalhes visíveis durante o prazo
+            # de correção, sem antecipar a aprovação ou a exportação.
+            if situacao_normalizada == "em_aberto" and event_id:
+                await insert_job(
+                    job_type="fetch_order_a",
+                    dedupe_key=f"A:vendas:{venda_id_int}:refresh_details:{event_id}",
+                    event_id=None,
+                    payload={
+                        "source": "A",
+                        "topic": "vendas",
+                        "venda_id": str(venda_id_int),
+                        "codigo_situacao": "em_aberto",
+                        "refresh_only": True,
+                        "force_refresh": True,
+                    },
+                )
         
         if source == "B" and topic == "notas" and venda_id_int is None and id_nota_fiscal_int is None:
             if event_id:
                 await update_event_action_result(event_id, "noop")
             return JSONResponse(content={"ok": True, "status": "ignored", "reason": "missing_venda_id_and_id_nota_fiscal"})
         
-        job_type = determine_job_type(source, topic, codigo_situacao_str)
-
-        if source == "A" and topic == "vendas" and venda_id_int and normalize_status(codigo_situacao_str) == "cancelado":
+        if source == "A" and topic == "vendas" and venda_id_int and situacao_normalizada == "cancelado":
+            if await check_is_echo(source, str(venda_id_int), situacao_normalizada):
+                if event_id:
+                    await update_event_action_result(event_id, "echo")
+                return JSONResponse(content={"ok": True, "status": "ignored", "reason": "echo"})
             await upsert_cancelled_order_review(str(venda_id_int))
+            if event_id:
+                await update_event_action_result(event_id, "cancel_review")
+            return JSONResponse(content={"ok": True, "status": "queued_for_review", "reason": "cancel_review"})
+
+        job_type = determine_job_type(source, topic, situacao_normalizada)
         
         if job_type == "noop":
             if event_id:
                 await update_event_action_result(event_id, "noop")
             return JSONResponse(content={"ok": True, "status": "ignored", "reason": f"noop for {source}/{topic}/{codigo_situacao_str}"})
         
-        if job_type == "sync_status" and venda_id_int and codigo_situacao_str:
-            is_echo = await check_is_echo(source, str(venda_id_int), codigo_situacao_str)
+        if job_type == "sync_status" and venda_id_int and situacao_normalizada:
+            is_echo = await check_is_echo(source, str(venda_id_int), situacao_normalizada)
             if is_echo:
                 if event_id:
                     await update_event_action_result(event_id, "echo")
@@ -322,22 +383,22 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
             if not mapping:
                 noop_payload = {
                     "source": source, "topic": topic,
-                    "venda_id": venda_str, "codigo_situacao": codigo_situacao_str
+                    "venda_id": venda_str, "codigo_situacao": situacao_normalizada
                 }
-                dedupe_key = generate_dedupe_key(source, topic, venda_id_int, "noop", codigo_situacao=codigo_situacao_str)
+                dedupe_key = generate_dedupe_key(source, topic, venda_id_int, "noop", codigo_situacao=situacao_normalizada)
                 await insert_job(job_type="noop", dedupe_key=dedupe_key, event_id=None, payload=noop_payload)
                 if event_id:
                     await update_event_action_result(event_id, "noop:no_orders_map")
                 logger.info(f"sync_status skipped: no orders_map for {source} venda {venda_id_int}")
                 return JSONResponse(content={"ok": True, "status": "ignored", "reason": "no_orders_map"})
         
-        dedupe_key = generate_dedupe_key(source, topic, venda_id_int, job_type, codigo_situacao=codigo_situacao_str)
+        dedupe_key = generate_dedupe_key(source, topic, venda_id_int, job_type, codigo_situacao=situacao_normalizada)
         
         job_payload = {
             "source": source,
             "topic": topic,
             "venda_id": str(venda_id_int) if venda_id_int is not None else None,
-            "codigo_situacao": codigo_situacao_str,
+            "codigo_situacao": situacao_normalizada,
             "id_nota_fiscal": id_nota_fiscal_str
         }
         
@@ -355,6 +416,7 @@ async def process_webhook(request: Request, source: str, topic: str) -> JSONResp
         return JSONResponse(content={"ok": True, "status": "error_logged"})
 
 
+@app.post("/webhooks/rj/vendas", response_model=WebhookResponse)
 @app.post("/webhooks/a/vendas", response_model=WebhookResponse)
 async def webhook_a_vendas(request: Request):
     return await process_webhook(request, source="A", topic="vendas")
@@ -380,6 +442,7 @@ async def webhook_rejuderme_vendas(request: Request):
     return await process_webhook(request, source="A", topic="vendas")
 
 
+@app.post("/webhooks/v365/vendas", response_model=WebhookResponse)
 @app.post("/webhooks/c/vendas", response_model=WebhookResponse)
 async def webhook_c_vendas(request: Request):
     return await process_webhook(request, source="B", topic="vendas")
@@ -400,6 +463,8 @@ async def webhook_c_vendas_legacy(request: Request):
     return await process_webhook(request, source="B", topic="vendas")
 
 
+@app.get("/webhooks/rj/vendas")
+@app.get("/webhooks/v365/vendas")
 @app.get("/webhooks/a/vendas")
 @app.get("/webhooks/a")
 @app.get("/webhook/a")
@@ -445,7 +510,7 @@ async def webhook_c_notas_fiscais(request: Request):
         payload=payload
     )
     
-    await insert_event(
+    event_id = await insert_event(
         event_key=event_key,
         source="B",
         topic="notas_fiscais",
@@ -455,35 +520,19 @@ async def webhook_c_notas_fiscais(request: Request):
         payload=payload_str
     )
     
+    if event_id:
+        await update_event_action_result(event_id, "noop:nf_synced_on_c_enviado")
+
     if id_nota_fiscal_int is None:
         return JSONResponse(content={"ok": True, "status": "ignored", "reason": "missing_id_nota_fiscal"})
-    
-    job_type = "sync_nf_link"
-    dedupe_key = f"C:notas_fiscais:{id_nota_fiscal_str}:{job_type}"
-    
-    nf_numero = dados.get("numero")
-    nf_serie = dados.get("serie")
-    nf_chave_acesso = dados.get("chaveAcesso") or dados.get("chave_acesso")
-    nf_data_emissao = dados.get("dataEmissao") or dados.get("data_emissao")
-    nf_valor_nota = dados.get("valorNota") or dados.get("valor_nota")
 
-    job_payload = {
-        "source": "B",
-        "topic": "notas_fiscais",
-        "venda_id": None,
-        "codigo_situacao": None,
+    return JSONResponse(content={
+        "ok": True,
+        "status": "ignored",
+        "reason": "nf_will_sync_when_order_c_is_enviado",
         "id_nota_fiscal": id_nota_fiscal_str,
         "url_danfe": url_danfe,
-        "nf_numero": str(nf_numero) if nf_numero is not None else None,
-        "nf_serie": str(nf_serie) if nf_serie is not None else None,
-        "nf_chave_acesso": nf_chave_acesso,
-        "nf_data_emissao": nf_data_emissao,
-        "nf_valor_nota": nf_valor_nota,
-    }
-    
-    await insert_job(job_type=job_type, dedupe_key=dedupe_key, event_id=None, payload=job_payload)
-    
-    return JSONResponse(content={"ok": True})
+    })
 
 
 @app.get("/health")
@@ -783,7 +832,8 @@ def _parse_order_date(value) -> datetime | None:
             text = text.split(separator)[0]
     for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
         try:
-            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+            local_day = datetime.strptime(text, fmt).date()
+            return datetime.combine(local_day, datetime.min.time(), tzinfo=APP_TZ).astimezone(timezone.utc)
         except Exception:
             pass
     try:
@@ -793,33 +843,40 @@ def _parse_order_date(value) -> datetime | None:
         return None
 
 
-def _dashboard_period(preset: str = "last_30", start: str | None = None, end: str | None = None) -> tuple[datetime, datetime, str]:
+def _dashboard_period(preset: str = "today", start: str | None = None, end: str | None = None) -> tuple[datetime, datetime, str]:
     now = datetime.now(timezone.utc)
-    today = now.date()
-    preset = (preset or "last_30").strip()
+    now_local = now.astimezone(APP_TZ)
+    today = now_local.date()
+    preset = (preset or "today").strip()
+
+    def local_start(day):
+        return datetime.combine(day, datetime.min.time(), tzinfo=APP_TZ).astimezone(timezone.utc)
+
     if preset == "custom" and start and end:
-        start_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
-        end_dt = datetime.fromisoformat(end).replace(tzinfo=timezone.utc) + timedelta(days=1)
+        start_day = datetime.fromisoformat(start).date()
+        end_day = datetime.fromisoformat(end).date()
+        start_dt = local_start(start_day)
+        end_dt = local_start(end_day + timedelta(days=1))
         return start_dt, end_dt, f"{start_dt:%d/%m/%Y} a {(end_dt - timedelta(days=1)):%d/%m/%Y}"
     if preset == "today":
-        start_dt = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+        start_dt = local_start(today)
         return start_dt, now, "Hoje"
     if preset == "yesterday":
         yesterday = today - timedelta(days=1)
-        start_dt = datetime.combine(yesterday, datetime.min.time(), tzinfo=timezone.utc)
-        end_dt = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+        start_dt = local_start(yesterday)
+        end_dt = local_start(today)
         return start_dt, end_dt, "Ontem"
     if preset == "last_7":
-        start_dt = datetime.combine(today - timedelta(days=7), datetime.min.time(), tzinfo=timezone.utc)
+        start_dt = local_start(today - timedelta(days=6))
         return start_dt, now, "Últimos 7 dias"
     if preset == "this_month":
-        start_dt = datetime(today.year, today.month, 1, tzinfo=timezone.utc)
+        start_dt = local_start(today.replace(day=1))
         return start_dt, now, "Este mês"
     if preset == "previous_month":
-        first_this_month = datetime(today.year, today.month, 1, tzinfo=timezone.utc)
+        first_this_month = today.replace(day=1)
         last_previous = first_this_month - timedelta(days=1)
-        start_dt = datetime(last_previous.year, last_previous.month, 1, tzinfo=timezone.utc)
-        return start_dt, first_this_month, "Mês anterior"
+        start_dt = local_start(last_previous.replace(day=1))
+        return start_dt, local_start(first_this_month), "Mês anterior"
     if preset == "previous_6_months":
         first_this_month = datetime(today.year, today.month, 1, tzinfo=timezone.utc)
         month = today.month - 6
@@ -829,7 +886,7 @@ def _dashboard_period(preset: str = "last_30", start: str | None = None, end: st
             year -= 1
         start_dt = datetime(year, month, 1, tzinfo=timezone.utc)
         return start_dt, first_this_month, "6 meses anteriores"
-    start_dt = datetime.combine(today - timedelta(days=30), datetime.min.time(), tzinfo=timezone.utc)
+    start_dt = local_start(today - timedelta(days=29))
     return start_dt, now, "Últimos 30 dias"
 
 
@@ -860,6 +917,8 @@ def _queue_task_label(job_type: str | None) -> str:
         "sync_tracking_c_to_a": "Enviar rastreio C → A",
         "sync_nf_link": "Enviar dados da NF",
         "fetch_order_a": "Buscar pedido A",
+        "sweep_origin_exports": "Varredura pedidos A",
+        "reconcile_recent_statuses": "Conferir situacoes recentes",
         "add_tag_c": "Adicionar marcador em C",
         "add_tag_a": "Adicionar marcador em A",
         "update_numero_compra": "Atualizar número ecommerce em C",
@@ -885,6 +944,10 @@ def _queue_account_writes(job_type: str | None, payload: dict) -> dict:
         return {"A": 1, "C": 0}
     if job_type == "update_numero_compra":
         return {"A": 0, "C": 1}
+    if job_type == "sweep_origin_exports":
+        return {"A": 1, "C": 0}
+    if job_type == "reconcile_recent_statuses":
+        return {"A": 1, "C": 1}
     if job_type == "sync_order_fields":
         target = payload.get("target") if isinstance(payload, dict) else None
         if target == "A":
@@ -903,11 +966,14 @@ def _window_start_10min(value: datetime | None) -> datetime | None:
     return value.replace(minute=(value.minute // 10) * 10, second=0, microsecond=0)
 
 
-def _order_display_fields(payload: dict) -> dict:
+def _order_display_fields(payload: dict, *, fallback_to_customer_address: bool = False) -> dict:
     payload = payload if isinstance(payload, dict) else {}
     cliente = payload.get("cliente") if isinstance(payload.get("cliente"), dict) else {}
     ecommerce = payload.get("ecommerce") if isinstance(payload.get("ecommerce"), dict) else {}
-    endereco_entrega = payload.get("enderecoEntrega") if isinstance(payload.get("enderecoEntrega"), dict) else {}
+    endereco_entrega = select_delivery_address(
+        payload,
+        fallback_to_customer=fallback_to_customer_address,
+    )
     transportador = payload.get("transportador") if isinstance(payload.get("transportador"), dict) else {}
     forma_envio = payload.get("formaEnvio") if isinstance(payload.get("formaEnvio"), dict) else transportador.get("formaEnvio")
     forma_frete = payload.get("formaFrete") if isinstance(payload.get("formaFrete"), dict) else transportador.get("formaFrete")
@@ -943,7 +1009,7 @@ def _order_display_fields(payload: dict) -> dict:
         "cep_entrega": endereco_entrega.get("cep"),
         "cidade_entrega": endereco_entrega.get("municipio") or endereco_entrega.get("cidade"),
         "uf_entrega": endereco_entrega.get("uf"),
-        "numero_endereco": endereco_entrega.get("numero"),
+        "numero_endereco": endereco_entrega.get("numero") or endereco_entrega.get("enderecoNro"),
         "complemento_endereco": endereco_entrega.get("complemento"),
         "itens": len(itens),
         "total_produtos": _money_value(total_produtos),
@@ -974,8 +1040,8 @@ def _order_display_fields(payload: dict) -> dict:
 
 
 def _comparison_fields(origin: dict, destination: dict) -> list[dict]:
-    origin_fields = _order_display_fields(origin)
-    destination_fields = _order_display_fields(destination)
+    origin_fields = _order_display_fields(origin, fallback_to_customer_address=True)
+    destination_fields = _order_display_fields(destination, fallback_to_customer_address=True)
     definitions = [
         ("nota_fiscal", "Nota fiscal", False),
         ("numero_pedido", "Número do pedido", False),
@@ -1001,29 +1067,82 @@ def _comparison_fields(origin: dict, destination: dict) -> list[dict]:
     for key, label, compare in definitions:
         origin_value = origin_fields.get(key)
         destination_value = destination_fields.get(key)
-        differs = _normalize_text(origin_value) != _normalize_text(destination_value)
+        if key in {"cpf", "cep_entrega"}:
+            origin_compare = "".join(char for char in _normalize_text(origin_value) if char.isdigit())
+            destination_compare = "".join(char for char in _normalize_text(destination_value) if char.isdigit())
+        elif key == "situacao":
+            origin_compare = normalize_status(origin_value) or ""
+            destination_compare = normalize_status(destination_value) or ""
+        elif key in {"forma_envio", "forma_frete"}:
+            origin_compare = normalize_shipping_label(origin_value)
+            destination_compare = normalize_shipping_label(destination_value)
+        elif isinstance(origin_value, str) or isinstance(destination_value, str):
+            origin_compare = " ".join(_normalize_text(origin_value).split()).casefold()
+            destination_compare = " ".join(_normalize_text(destination_value).split()).casefold()
+        else:
+            origin_compare = _normalize_text(origin_value)
+            destination_compare = _normalize_text(destination_value)
+        differs = origin_compare != destination_compare
+        is_divergent = bool(compare and differs)
+        if key == "situacao":
+            is_divergent = bool(
+                differs
+                and destination_compare in {"cancelado", "enviado", "entregue", "nao_entregue"}
+            )
         rows.append({
             "key": key,
             "label": label,
             "origin": origin_value,
             "destination": destination_value,
             "differs": differs,
-            "divergent": bool(compare and differs),
+            "divergent": is_divergent,
         })
     return rows
+
+
+def _merge_order_payload(base: dict, update: dict) -> dict:
+    """Merge partial webhook data without erasing richer fetched order details."""
+    merged = dict(base or {})
+    for key, value in (update or {}).items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _merge_order_payload(current, value)
+        elif value not in (None, "", [], {}):
+            merged[key] = value
+        elif key not in merged:
+            merged[key] = value
+    return merged
+
+
+def _parse_timestamp(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _snapshot_order_payload(row: dict) -> dict:
+    fetched_payload = _json_payload(row.get("fetched_payload"))
+    webhook_payload = _json_payload(row.get("webhook_payload"))
+    if fetched_payload and webhook_payload:
+        fetched_at = _parse_timestamp(row.get("fetched_at"))
+        webhook_at = _parse_timestamp(webhook_payload.get("__received_at"))
+        if fetched_at and (not webhook_at or fetched_at >= webhook_at):
+            return _merge_order_payload(webhook_payload, fetched_payload)
+        return _merge_order_payload(fetched_payload, webhook_payload)
+    return fetched_payload or webhook_payload
 
 
 def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None = None) -> dict:
     mapped_product_ids = mapped_product_ids or set()
     fetched_payload = _json_payload(row.get("fetched_payload"))
     webhook_payload = _json_payload(row.get("webhook_payload"))
-    if fetched_payload and webhook_payload:
-        payload = dict(fetched_payload)
-        for key, value in webhook_payload.items():
-            if value is not None:
-                payload[key] = value
-    else:
-        payload = fetched_payload or webhook_payload
+    payload = _snapshot_order_payload(row)
     cliente = payload.get("cliente") if isinstance(payload, dict) else {}
     ecommerce = payload.get("ecommerce") if isinstance(payload, dict) else {}
     endereco_entrega = payload.get("enderecoEntrega") if isinstance(payload, dict) else {}
@@ -1054,7 +1173,6 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
         forma_frete = {}
     if not isinstance(transportador, dict):
         transportador = {}
-    source_kind = payload.get("__source") if isinstance(payload, dict) else None
 
     billing_address = _normalize_address(endereco_faturamento)
     delivery_address = _normalize_address(endereco_entrega)
@@ -1067,10 +1185,34 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
         adjustment_reasons.append("cliente_sem_nome")
     if not cliente.get("cpfCnpj"):
         adjustment_reasons.append("cliente_sem_cpf_cnpj")
-    if not itens and source_kind != "list_orders":
+    fetched_source = fetched_payload.get("__source") if isinstance(fetched_payload, dict) else None
+    if not itens and (
+        not fetched_payload
+        or fetched_source in {"list_orders", "daily_sweep_origin_exports"}
+    ):
+        adjustment_reasons.append("detalhes_pendentes")
+    elif not itens:
         adjustment_reasons.append("sem_itens")
     if not payload:
         adjustment_reasons.append("sem_detalhes_do_pedido")
+
+    marker_values = []
+    for marker_key in ("marcadores", "tags"):
+        raw_markers = payload.get(marker_key) if isinstance(payload, dict) else None
+        if isinstance(raw_markers, list):
+            for marker in raw_markers:
+                if isinstance(marker, dict):
+                    marker_values.extend(
+                        str(marker.get(key, "")).strip().lower()
+                        for key in ("descricao", "nome", "tag")
+                        if marker.get(key)
+                    )
+                elif marker:
+                    marker_values.append(str(marker).strip().lower())
+        elif raw_markers:
+            marker_values.append(str(raw_markers).strip().lower())
+    if "v365" in marker_values:
+        block_reasons.append("ja_marcado_v365")
 
     deposito = payload.get("deposito") if isinstance(payload, dict) else {}
     deposito_id = deposito.get("id") if isinstance(deposito, dict) else None
@@ -1104,6 +1246,11 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
     if missing_skus:
         adjustment_reasons.append("produto_sem_mapeamento")
 
+    last_error = _json_payload(row.get("last_error"))
+    is_deleted = str(last_error.get("status_code") or "") == "404"
+    if is_deleted:
+        block_reasons.append("pedido_excluido")
+
     adjustment_reasons = list(dict.fromkeys(adjustment_reasons))
     block_reasons = list(dict.fromkeys(block_reasons))
 
@@ -1113,6 +1260,11 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
         export_category = "needs_adjustment"
     else:
         export_category = "valid"
+
+    webhook_received_at = row.get("webhook_received_at") or row.get("created_at") or row.get("updated_at")
+    transfer_scheduled_at = row.get("transfer_scheduled_at") or row.get("approval_scheduled_at")
+    if not transfer_scheduled_at and export_category == "valid" and status_normalized == "em_aberto":
+        transfer_scheduled_at = approval_target_at(webhook_received_at)
 
     return {
         "venda_a_id": str(row.get("venda_a_id") or ""),
@@ -1164,16 +1316,158 @@ def _order_summary_from_snapshot(row: dict, mapped_product_ids: set[int] | None 
         "endereco_faturamento_diferente_entrega": address_differs,
         "itens": len(itens),
         "updated_at": row.get("updated_at"),
-        "webhook_received_at": row.get("webhook_received_at") or row.get("created_at") or row.get("updated_at"),
+        "webhook_received_at": webhook_received_at,
         "approval_scheduled_at": row.get("approval_scheduled_at"),
-        "transfer_scheduled_at": row.get("transfer_scheduled_at") or row.get("approval_scheduled_at"),
+        "transfer_scheduled_at": transfer_scheduled_at,
         "valid_for_export": export_category == "valid",
         "export_category": export_category,
         "adjustment_reasons": adjustment_reasons,
         "block_reasons": block_reasons,
         "missing_skus": missing_skus,
+        "is_deleted": is_deleted,
         "reasons": adjustment_reasons + block_reasons,
     }
+
+
+def _synced_panel_item(row: dict, mapped_product_ids: set[int] | None = None) -> dict:
+    item = dict(row)
+    origin_payload = _snapshot_order_payload(item)
+    origin_summary = _order_summary_from_snapshot(item, mapped_product_ids)
+    destination_payload = _json_payload(item.get("fetched_payload_c"))
+    destination_fields = _order_display_fields(destination_payload, fallback_to_customer_address=True)
+    destination_status = (
+        normalize_status(destination_payload.get("situacao"))
+        or normalize_status(item.get("destination_status"))
+        or normalize_status(item.get("last_sync_status"))
+        or "em_aberto"
+    )
+    item.update(origin_summary)
+    item["situacao_a"] = origin_payload.get("situacao") if origin_payload else None
+    item["situacao_a_label"] = _status_label(item.get("situacao_a"))
+    item["situacao_destino"] = destination_status
+    item["situacao_destino_label"] = _status_label(destination_status)
+    item["nota_fiscal_destino"] = destination_fields.get("nota_fiscal")
+    item["numero_destino"] = destination_fields.get("numero_pedido")
+    item["forma_envio_divergent"] = (
+        normalize_shipping_label(origin_summary.get("forma_envio"))
+        != normalize_shipping_label(destination_fields.get("forma_envio"))
+        or normalize_shipping_label(origin_summary.get("forma_frete"))
+        != normalize_shipping_label(destination_fields.get("forma_frete"))
+    )
+    item["codigo_rastreamento_divergent"] = (
+        _normalize_text(origin_summary.get("codigo_rastreamento")).casefold()
+        != _normalize_text(destination_fields.get("codigo_rastreamento")).casefold()
+    )
+    item["last_job_status"] = item.get("latest_job_status") or item.get("last_sync_status")
+    item["latest_job_type"] = item.get("latest_job_type")
+    item["divergence_count"] = None
+    item["divergence_types"] = []
+    if origin_payload and destination_payload:
+        fields = _comparison_fields(origin_payload, destination_payload)
+        divergent_fields = [field for field in fields if field["divergent"]]
+        item["divergence_count"] = len(divergent_fields)
+        item["divergence_types"] = [
+            {"key": field["key"], "label": field["label"]}
+            for field in divergent_fields
+        ]
+    for private_key in (
+        "webhook_payload",
+        "fetched_payload",
+        "fetched_payload_c",
+        "last_error",
+    ):
+        item.pop(private_key, None)
+    return item
+
+
+async def _origin_panel_items(force: bool = False) -> list[dict]:
+    """Build the current unsynced origin set once for list and refresh actions."""
+    now = time.monotonic()
+    cached_items = _origin_panel_cache.get("items")
+    if not force and cached_items is not None and now < float(_origin_panel_cache.get("expires_at") or 0):
+        return cached_items
+
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            WITH unsynced_ids AS MATERIALIZED (
+                SELECT so.venda_a_id
+                FROM public.orders_a_snapshot so
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM public.orders_map om
+                    WHERE om.venda_a_id::text = so.venda_a_id
+                )
+                ORDER BY so.updated_at DESC
+                LIMIT 5000
+            )
+            SELECT so.venda_a_id, so.webhook_payload, so.fetched_payload, so.fetched_at, so.last_error,
+                   so.created_at, so.updated_at, so.created_at AS webhook_received_at,
+                   NULL::timestamptz AS approval_scheduled_at,
+                   NULL::timestamptz AS transfer_scheduled_at
+            FROM unsynced_ids unsynced
+            JOIN public.orders_a_snapshot so ON so.venda_a_id = unsynced.venda_a_id
+            ORDER BY so.updated_at DESC
+        """)
+        mapped_product_rows = await conn.fetch("""
+            SELECT id_a FROM public.products_map WHERE id_c IS NOT NULL
+        """)
+        origin_ids = [str(row["venda_a_id"]) for row in rows]
+        latest_create_rows = await conn.fetch("""
+            SELECT DISTINCT ON (venda_a_id) venda_a_id, status, last_error, updated_at
+            FROM (
+                SELECT COALESCE(payload->>'venda_a_id', payload->>'venda_id') AS venda_a_id,
+                       status, last_error, updated_at, id
+                FROM public.jobs
+                WHERE job_type = 'create_order_c'
+                  AND COALESCE(payload->>'venda_a_id', payload->>'venda_id') = ANY($1::text[])
+            ) jobs_by_order
+            WHERE venda_a_id IS NOT NULL
+            ORDER BY venda_a_id, updated_at DESC NULLS LAST, id DESC
+        """, origin_ids) if origin_ids else []
+        schedule_rows = await conn.fetch("""
+            SELECT DISTINCT ON (venda_a_id) venda_a_id, job_type, run_after, created_at
+            FROM (
+                SELECT COALESCE(payload->>'venda_a_id', payload->>'venda_id') AS venda_a_id,
+                       job_type, run_after, created_at, id
+                FROM public.jobs
+                WHERE job_type IN ('approve_order_a', 'create_order_c')
+                  AND status IN ('queued', 'running')
+                  AND COALESCE(payload->>'venda_a_id', payload->>'venda_id') = ANY($1::text[])
+            ) scheduled
+            WHERE venda_a_id IS NOT NULL
+            ORDER BY venda_a_id,
+                     CASE WHEN job_type = 'create_order_c' THEN 0 ELSE 1 END,
+                     run_after DESC NULLS LAST, id DESC
+        """, origin_ids) if origin_ids else []
+
+    mapped_ids = {int(row["id_a"]) for row in mapped_product_rows if row["id_a"] is not None}
+    latest_create = {str(row["venda_a_id"]): dict(row) for row in latest_create_rows}
+    schedules = {str(row["venda_a_id"]): dict(row) for row in schedule_rows}
+    items = []
+    for row in rows:
+        summary = _order_summary_from_snapshot(dict(row), mapped_ids)
+        if summary.get("is_deleted"):
+            continue
+        venda_a_id = str(summary.get("venda_a_id") or "")
+        create_job = latest_create.get(venda_a_id)
+        if create_job and create_job.get("status") in {"failed", "dead", "waiting_sku"}:
+            if summary["export_category"] == "valid":
+                summary["export_category"] = "needs_adjustment"
+                summary["valid_for_export"] = False
+            summary["last_create_error"] = create_job.get("last_error")
+            summary["last_create_error_status"] = create_job.get("status")
+            summary["adjustment_reasons"] = list(dict.fromkeys(summary["adjustment_reasons"] + ["erro_criacao_c"]))
+            summary["reasons"] = list(dict.fromkeys(summary["adjustment_reasons"] + summary["block_reasons"]))
+        schedule = schedules.get(venda_a_id)
+        if schedule:
+            summary["transfer_scheduled_at"] = schedule.get("run_after") or schedule.get("created_at")
+        elif summary.get("valid_for_export") and summary.get("situacao_normalized") == "aprovado":
+            summary["transfer_scheduled_at"] = row.get("updated_at")
+        items.append(summary)
+    _origin_panel_cache["items"] = items
+    _origin_panel_cache["expires_at"] = time.monotonic() + ORIGIN_PANEL_CACHE_SECONDS
+    return items
 
 
 def _diff_orders(origin: dict, destination: dict) -> list[dict]:
@@ -1217,7 +1511,7 @@ async def order_panel_alias():
 
 @app.get("/admin/orders-panel/summary")
 async def admin_orders_panel_summary(
-    period: str = "last_30",
+    period: str = "today",
     start: str | None = None,
     end: str | None = None,
 ):
@@ -1227,127 +1521,263 @@ async def admin_orders_panel_summary(
     p = await get_pool()
     async with p.acquire() as conn:
         row = await conn.fetchrow("""
-            WITH origin_base AS (
-                SELECT so.venda_a_id::text AS venda_a_id,
-                       COALESCE(so.fetched_payload, '{}'::jsonb) || COALESCE(so.webhook_payload, '{}'::jsonb) AS payload
+            WITH unsynced_ids AS MATERIALIZED (
+                SELECT so.venda_a_id
                 FROM public.orders_a_snapshot so
-                LEFT JOIN public.orders_map om ON om.venda_a_id::text = so.venda_a_id::text
-                WHERE om.venda_a_id IS NULL
-                  AND so.updated_at >= $1
-                  AND so.updated_at < $2
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM public.orders_map om
+                    WHERE om.venda_a_id::text = so.venda_a_id
+                )
             ),
-            failed_create AS (
-                SELECT DISTINCT COALESCE(payload::jsonb->>'venda_a_id', payload::jsonb->>'venda_id') AS venda_a_id
-                FROM public.jobs
-                WHERE job_type = 'create_order_c'
-                  AND status IN ('failed', 'dead', 'waiting_sku')
-                  AND COALESCE(payload::jsonb->>'venda_a_id', payload::jsonb->>'venda_id') IS NOT NULL
+            latest_create AS (
+                SELECT DISTINCT ON (unsynced.venda_a_id)
+                       unsynced.venda_a_id, j.status
+                FROM unsynced_ids unsynced
+                JOIN public.jobs j
+                  ON COALESCE(j.payload->>'venda_a_id', j.payload->>'venda_id') = unsynced.venda_a_id
+                WHERE j.job_type = 'create_order_c'
+                ORDER BY unsynced.venda_a_id, j.updated_at DESC NULLS LAST, j.id DESC
             ),
-            origin_class AS (
-                SELECT ob.venda_a_id,
+            origin_raw AS (
+                SELECT so.venda_a_id::text AS venda_a_id,
+                       so.created_at,
+                       so.fetched_payload,
+                       so.webhook_payload,
                        CASE
-                           WHEN (ob.payload->>'situacao') ~ '^[0-9]+$' THEN
-                               CASE (ob.payload->>'situacao')::int
-                                   WHEN 0 THEN 'em_aberto'
-                                   WHEN 1 THEN 'faturado'
-                                   WHEN 2 THEN 'cancelado'
-                                   WHEN 3 THEN 'aprovado'
-                                   WHEN 4 THEN 'preparando_envio'
-                                   WHEN 5 THEN 'enviado'
-                                   WHEN 6 THEN 'entregue'
-                                   WHEN 7 THEN 'pronto_envio'
-                                   WHEN 8 THEN 'dados_incompletos'
-                                   WHEN 9 THEN 'nao_entregue'
-                                   ELSE ob.payload->>'situacao'
-                               END
-                           ELSE lower(replace(coalesce(ob.payload->>'situacao', ''), ' ', '_'))
-                       END AS status_norm,
-                       lower(coalesce(
-                           ob.payload #>> '{formaEnvio,nome}',
-                           ob.payload #>> '{transportador,formaEnvio,nome}',
-                           ob.payload #>> '{transportador,nome}',
+                           WHEN CASE
+                               WHEN COALESCE(so.webhook_payload->>'__received_at', '') ~ '^\\d{4}-\\d{2}-\\d{2}T'
+                               THEN (so.webhook_payload->>'__received_at')::timestamptz > COALESCE(so.fetched_at, '-infinity'::timestamptz)
+                               ELSE false
+                           END
+                           THEN COALESCE(
+                               so.webhook_payload->>'situacao',
+                               so.webhook_payload #>> '{dados,codigoSituacao}',
+                               so.fetched_payload->>'situacao',
+                               ''
+                           )
+                           ELSE COALESCE(
+                               so.fetched_payload->>'situacao',
+                               so.webhook_payload->>'situacao',
+                               so.webhook_payload #>> '{dados,codigoSituacao}',
+                               ''
+                           )
+                       END AS status_raw,
+                       COALESCE(
+                           NULLIF(so.fetched_payload #>> '{cliente,nome}', ''),
+                           NULLIF(so.webhook_payload #>> '{cliente,nome}', '')
+                       ) AS cliente_nome,
+                       COALESCE(
+                           NULLIF(so.fetched_payload #>> '{cliente,cpfCnpj}', ''),
+                           NULLIF(so.webhook_payload #>> '{cliente,cpfCnpj}', '')
+                       ) AS cliente_cpf,
+                       lower(COALESCE(
+                           NULLIF(so.fetched_payload #>> '{formaEnvio,nome}', ''),
+                           NULLIF(so.fetched_payload #>> '{transportador,formaEnvio,nome}', ''),
+                           NULLIF(so.webhook_payload #>> '{formaEnvio,nome}', ''),
+                           NULLIF(so.webhook_payload #>> '{transportador,formaEnvio,nome}', ''),
                            ''
                        )) AS forma_envio,
-                       nullif(ob.payload #>> '{cliente,nome}', '') AS cliente_nome,
-                       nullif(ob.payload #>> '{cliente,cpfCnpj}', '') AS cliente_cpf,
-                       fc.venda_a_id IS NOT NULL AS failed_create
-                FROM origin_base ob
-                LEFT JOIN failed_create fc ON fc.venda_a_id = ob.venda_a_id
+                       COALESCE(
+                           so.fetched_payload #>> '{deposito,id}',
+                           so.webhook_payload #>> '{deposito,id}'
+                       ) AS deposito_id,
+                       lower(COALESCE(
+                           so.fetched_payload->'marcadores',
+                           so.fetched_payload->'tags',
+                           so.webhook_payload->'marcadores',
+                           so.webhook_payload->'tags',
+                           '[]'::jsonb
+                       )::text) LIKE '%v365%' AS has_v365,
+                       CASE
+                           WHEN jsonb_typeof(so.fetched_payload->'itens') = 'array' THEN so.fetched_payload->'itens'
+                           WHEN jsonb_typeof(so.webhook_payload->'itens') = 'array' THEN so.webhook_payload->'itens'
+                           ELSE '[]'::jsonb
+                       END AS itens,
+                       COALESCE(
+                           so.fetched_payload->>'data', so.fetched_payload->>'dataPedido',
+                           so.webhook_payload->>'data', so.webhook_payload->>'dataPedido',
+                           so.webhook_payload #>> '{dados,data}'
+                       ) AS order_date_text,
+                       so.fetched_payload IS NULL OR so.fetched_payload = '{}'::jsonb AS details_missing,
+                       COALESCE(so.last_error->>'status_code', '') = '404' AS is_deleted,
+                       lc.status IN ('failed', 'dead', 'waiting_sku') AS failed_create
+                FROM unsynced_ids unsynced
+                JOIN public.orders_a_snapshot so ON so.venda_a_id = unsynced.venda_a_id
+                LEFT JOIN latest_create lc ON lc.venda_a_id = so.venda_a_id::text
+            ),
+            origin_normalized AS (
+                SELECT origin_raw.*,
+                       CASE
+                           WHEN status_raw ~ '^[0-9]+$' THEN
+                               CASE status_raw::int
+                                   WHEN 0 THEN 'em_aberto' WHEN 1 THEN 'faturado' WHEN 2 THEN 'cancelado'
+                                   WHEN 3 THEN 'aprovado' WHEN 4 THEN 'preparando_envio' WHEN 5 THEN 'enviado'
+                                   WHEN 6 THEN 'entregue' WHEN 7 THEN 'pronto_envio' WHEN 8 THEN 'dados_incompletos'
+                                   WHEN 9 THEN 'nao_entregue' ELSE status_raw
+                               END
+                           WHEN lower(replace(status_raw, ' ', '_')) IN ('aberto', 'aberta', 'em_aberta') THEN 'em_aberto'
+                           WHEN lower(replace(status_raw, ' ', '_')) = 'aprovada' THEN 'aprovado'
+                           WHEN lower(replace(status_raw, ' ', '_')) = 'cancelada' THEN 'cancelado'
+                           ELSE lower(replace(status_raw, ' ', '_'))
+                       END AS status_norm,
+                       CASE
+                           WHEN order_date_text ~ '^\\d{4}-\\d{2}-\\d{2}' THEN
+                               to_date(left(order_date_text, 10), 'YYYY-MM-DD')::timestamp
+                               AT TIME ZONE 'America/Sao_Paulo'
+                           WHEN order_date_text ~ '^\\d{2}/\\d{2}/\\d{4}' THEN
+                               to_date(left(order_date_text, 10), 'DD/MM/YYYY')::timestamp
+                               AT TIME ZONE 'America/Sao_Paulo'
+                           ELSE created_at
+                       END AS order_at,
+                       EXISTS (
+                           SELECT 1
+                           FROM jsonb_array_elements(itens) item
+                           WHERE (item #>> '{produto,id}') ~ '^[0-9]+$'
+                             AND NOT EXISTS (
+                                 SELECT 1 FROM public.products_map pm
+                                 WHERE pm.id_a = (item #>> '{produto,id}')::int
+                                   AND pm.id_c IS NOT NULL
+                             )
+                       ) AS missing_product_mapping
+                FROM origin_raw
+            ),
+            origin_class AS (
+                SELECT *,
+                       (
+                           forma_envio IN ('mercado envios', 'tiktok shipping')
+                           OR (deposito_id IS NOT NULL AND deposito_id <> '336403602')
+                           OR has_v365
+                           OR (status_norm <> '' AND status_norm NOT IN ('em_aberto', 'aprovado'))
+                       ) AS blocked,
+                       (
+                           status_norm = '' OR details_missing OR cliente_nome IS NULL OR cliente_cpf IS NULL
+                           OR jsonb_array_length(itens) = 0 OR missing_product_mapping OR failed_create
+                       ) AS needs_fix
+                FROM origin_normalized
+                WHERE NOT is_deleted
             ),
             origin_counts AS (
                 SELECT
                     COUNT(*) FILTER (
-                        WHERE status_norm IN ('em_aberto', 'aprovado')
-                          AND forma_envio NOT IN ('mercado envios', 'tiktok shipping')
-                          AND cliente_nome IS NOT NULL
-                          AND cliente_cpf IS NOT NULL
-                          AND NOT failed_create
+                        WHERE NOT blocked AND NOT needs_fix
+                          AND status_norm IN ('em_aberto', 'aprovado')
+                          AND order_at >= $1 AND order_at < $2
                     )::int AS scheduled_export,
+                    COUNT(*) FILTER (WHERE NOT blocked AND needs_fix)::int AS needs_adjustment,
                     COUNT(*) FILTER (
-                        WHERE status_norm IN ('em_aberto', 'aprovado')
-                          AND forma_envio NOT IN ('mercado envios', 'tiktok shipping')
-                          AND (cliente_nome IS NULL OR cliente_cpf IS NULL OR failed_create)
-                    )::int AS needs_adjustment,
-                    COUNT(*) FILTER (
-                        WHERE forma_envio IN ('mercado envios', 'tiktok shipping')
-                           OR (status_norm <> '' AND status_norm NOT IN ('em_aberto', 'aprovado'))
+                        WHERE blocked AND order_at >= $1 AND order_at < $2
                     )::int AS do_not_export
                 FROM origin_class
             ),
             synced_pairs AS (
-                SELECT COALESCE(oas.fetched_payload, '{}'::jsonb) || COALESCE(oas.webhook_payload, '{}'::jsonb) AS a_payload,
-                       COALESCE(ocs.fetched_payload, '{}'::jsonb) AS c_payload
+                SELECT COALESCE(oas.fetched_payload, '{}'::jsonb) AS a_payload,
+                       COALESCE(oas.webhook_payload, '{}'::jsonb) AS a_webhook,
+                       COALESCE(ocs.fetched_payload, '{}'::jsonb) AS c_payload,
+                       CASE
+                           WHEN COALESCE(oas.webhook_payload->>'__received_at', '') ~ '^\\d{4}-\\d{2}-\\d{2}T'
+                           THEN (oas.webhook_payload->>'__received_at')::timestamptz > COALESCE(oas.fetched_at, '-infinity'::timestamptz)
+                           ELSE false
+                       END AS a_webhook_newer
                 FROM public.orders_map om
-                LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
-                LEFT JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = om.venda_c_id::text
+                JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
+                JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = om.venda_c_id::text
                 WHERE om.venda_c_id IS NOT NULL
-                  AND om.updated_at >= $1
-                  AND om.updated_at < $2
+                  AND oas.fetched_payload IS NOT NULL
+                  AND ocs.fetched_payload IS NOT NULL
+            ),
+            synced_raw AS (
+                SELECT *,
+                       CASE
+                           WHEN a_webhook_newer THEN COALESCE(a_webhook->>'situacao', a_payload->>'situacao', '')
+                           ELSE COALESCE(a_payload->>'situacao', a_webhook->>'situacao', '')
+                       END AS a_status_raw,
+                       COALESCE(c_payload->>'situacao', '') AS c_status_raw,
+                       CASE WHEN jsonb_typeof(a_payload->'itens') = 'array' THEN jsonb_array_length(a_payload->'itens') ELSE 0 END AS a_items,
+                       CASE WHEN jsonb_typeof(c_payload->'itens') = 'array' THEN jsonb_array_length(c_payload->'itens') ELSE 0 END AS c_items,
+                       CASE
+                           WHEN NULLIF(BTRIM(CONCAT_WS('',
+                               a_payload #>> '{enderecoEntrega,cep}',
+                               a_payload #>> '{enderecoEntrega,uf}',
+                               a_payload #>> '{enderecoEntrega,municipio}',
+                               a_payload #>> '{enderecoEntrega,cidade}',
+                               a_payload #>> '{enderecoEntrega,endereco}',
+                               a_payload #>> '{enderecoEntrega,logradouro}',
+                               a_payload #>> '{enderecoEntrega,numero}',
+                               a_payload #>> '{enderecoEntrega,enderecoNro}',
+                               a_payload #>> '{enderecoEntrega,bairro}',
+                               a_payload #>> '{enderecoEntrega,complemento}'
+                           )), '') IS NOT NULL
+                           THEN a_payload->'enderecoEntrega'
+                           WHEN jsonb_typeof(a_payload #> '{cliente,endereco}') = 'object'
+                           THEN a_payload #> '{cliente,endereco}'
+                           WHEN jsonb_typeof(a_payload->'endereco') = 'object'
+                           THEN a_payload->'endereco'
+                           ELSE '{}'::jsonb
+                       END AS a_effective_delivery,
+                       CASE
+                           WHEN NULLIF(BTRIM(CONCAT_WS('',
+                               c_payload #>> '{enderecoEntrega,cep}',
+                               c_payload #>> '{enderecoEntrega,uf}',
+                               c_payload #>> '{enderecoEntrega,municipio}',
+                               c_payload #>> '{enderecoEntrega,cidade}',
+                               c_payload #>> '{enderecoEntrega,endereco}',
+                               c_payload #>> '{enderecoEntrega,logradouro}',
+                               c_payload #>> '{enderecoEntrega,numero}',
+                               c_payload #>> '{enderecoEntrega,enderecoNro}',
+                               c_payload #>> '{enderecoEntrega,bairro}',
+                               c_payload #>> '{enderecoEntrega,complemento}'
+                           )), '') IS NOT NULL
+                           THEN c_payload->'enderecoEntrega'
+                           WHEN jsonb_typeof(c_payload #> '{cliente,endereco}') = 'object'
+                           THEN c_payload #> '{cliente,endereco}'
+                           WHEN jsonb_typeof(c_payload->'endereco') = 'object'
+                           THEN c_payload->'endereco'
+                           ELSE '{}'::jsonb
+                       END AS c_effective_delivery
+                FROM synced_pairs
             ),
             synced_normalized AS (
-                SELECT a_payload, c_payload,
+                SELECT synced_raw.*,
                        CASE
-                           WHEN (a_payload->>'situacao') ~ '^[0-9]+$' THEN
-                               CASE (a_payload->>'situacao')::int
-                                   WHEN 0 THEN 'em_aberto' WHEN 1 THEN 'faturado' WHEN 2 THEN 'cancelado'
-                                   WHEN 3 THEN 'aprovado' WHEN 4 THEN 'preparando_envio' WHEN 5 THEN 'enviado'
-                                   WHEN 6 THEN 'entregue' WHEN 7 THEN 'pronto_envio' WHEN 8 THEN 'dados_incompletos'
-                                   WHEN 9 THEN 'nao_entregue' ELSE a_payload->>'situacao'
-                               END
-                           ELSE lower(replace(coalesce(a_payload->>'situacao', ''), ' ', '_'))
+                           WHEN a_status_raw ~ '^[0-9]+$' THEN
+                               CASE a_status_raw::int WHEN 0 THEN 'em_aberto' WHEN 1 THEN 'faturado' WHEN 2 THEN 'cancelado' WHEN 3 THEN 'aprovado' WHEN 4 THEN 'preparando_envio' WHEN 5 THEN 'enviado' WHEN 6 THEN 'entregue' WHEN 7 THEN 'pronto_envio' WHEN 8 THEN 'dados_incompletos' WHEN 9 THEN 'nao_entregue' ELSE a_status_raw END
+                           WHEN lower(replace(a_status_raw, ' ', '_')) IN ('aberto', 'aberta', 'em_aberta') THEN 'em_aberto'
+                           ELSE lower(replace(a_status_raw, ' ', '_'))
                        END AS a_status,
                        CASE
-                           WHEN (c_payload->>'situacao') ~ '^[0-9]+$' THEN
-                               CASE (c_payload->>'situacao')::int
-                                   WHEN 0 THEN 'em_aberto' WHEN 1 THEN 'faturado' WHEN 2 THEN 'cancelado'
-                                   WHEN 3 THEN 'aprovado' WHEN 4 THEN 'preparando_envio' WHEN 5 THEN 'enviado'
-                                   WHEN 6 THEN 'entregue' WHEN 7 THEN 'pronto_envio' WHEN 8 THEN 'dados_incompletos'
-                                   WHEN 9 THEN 'nao_entregue' ELSE c_payload->>'situacao'
-                               END
-                           ELSE lower(replace(coalesce(c_payload->>'situacao', ''), ' ', '_'))
+                           WHEN c_status_raw ~ '^[0-9]+$' THEN
+                               CASE c_status_raw::int WHEN 0 THEN 'em_aberto' WHEN 1 THEN 'faturado' WHEN 2 THEN 'cancelado' WHEN 3 THEN 'aprovado' WHEN 4 THEN 'preparando_envio' WHEN 5 THEN 'enviado' WHEN 6 THEN 'entregue' WHEN 7 THEN 'pronto_envio' WHEN 8 THEN 'dados_incompletos' WHEN 9 THEN 'nao_entregue' ELSE c_status_raw END
+                           ELSE lower(replace(c_status_raw, ' ', '_'))
                        END AS c_status
-                FROM synced_pairs
-                WHERE c_payload <> '{}'::jsonb
+                FROM synced_raw
             ),
             divergence_counts AS (
                 SELECT COUNT(*)::int AS divergent
                 FROM synced_normalized
-                WHERE lower(coalesce(a_payload #>> '{cliente,cpfCnpj}', '')) <> lower(coalesce(c_payload #>> '{cliente,cpfCnpj}', ''))
-                   OR a_status <> c_status
-                   OR lower(coalesce(a_payload #>> '{enderecoEntrega,cep}', '')) <> lower(coalesce(c_payload #>> '{enderecoEntrega,cep}', ''))
-                   OR lower(coalesce(a_payload #>> '{enderecoEntrega,uf}', '')) <> lower(coalesce(c_payload #>> '{enderecoEntrega,uf}', ''))
-                   OR lower(coalesce(a_payload #>> '{enderecoEntrega,municipio}', a_payload #>> '{enderecoEntrega,cidade}', '')) <> lower(coalesce(c_payload #>> '{enderecoEntrega,municipio}', c_payload #>> '{enderecoEntrega,cidade}', ''))
-                   OR lower(coalesce(a_payload #>> '{ecommerce,numeroPedidoEcommerce}', '')) <> lower(coalesce(c_payload ->> 'numeroOrdemCompra', ''))
+                WHERE lower(trim(coalesce(a_payload #>> '{cliente,nome}', ''))) <> lower(trim(coalesce(c_payload #>> '{cliente,nome}', '')))
+                   OR regexp_replace(coalesce(a_payload #>> '{cliente,cpfCnpj}', ''), '\\D', '', 'g') <> regexp_replace(coalesce(c_payload #>> '{cliente,cpfCnpj}', ''), '\\D', '', 'g')
+                   OR (c_status IN ('cancelado', 'enviado', 'entregue', 'nao_entregue') AND a_status <> c_status)
+                   OR regexp_replace(coalesce(a_effective_delivery->>'cep', ''), '\\D', '', 'g') <> regexp_replace(coalesce(c_effective_delivery->>'cep', ''), '\\D', '', 'g')
+                   OR lower(trim(coalesce(a_effective_delivery->>'uf', ''))) <> lower(trim(coalesce(c_effective_delivery->>'uf', '')))
+                   OR lower(trim(coalesce(a_effective_delivery->>'municipio', a_effective_delivery->>'cidade', ''))) <> lower(trim(coalesce(c_effective_delivery->>'municipio', c_effective_delivery->>'cidade', '')))
+                   OR lower(trim(coalesce(a_effective_delivery->>'numero', a_effective_delivery->>'enderecoNro', ''))) <> lower(trim(coalesce(c_effective_delivery->>'numero', c_effective_delivery->>'enderecoNro', '')))
+                   OR lower(trim(coalesce(a_effective_delivery->>'complemento', ''))) <> lower(trim(coalesce(c_effective_delivery->>'complemento', '')))
+                   OR a_items <> c_items
+                   OR regexp_replace(lower(trim(coalesce(a_payload #>> '{formaEnvio,nome}', a_payload #>> '{transportador,formaEnvio,nome}', ''))), '^rejuderme[[:space:]]*[-:|][[:space:]]*', '') <> regexp_replace(lower(trim(coalesce(c_payload #>> '{formaEnvio,nome}', c_payload #>> '{transportador,formaEnvio,nome}', ''))), '^rejuderme[[:space:]]*[-:|][[:space:]]*', '')
+                   OR regexp_replace(lower(trim(coalesce(a_payload #>> '{formaFrete,nome}', a_payload #>> '{transportador,formaFrete,nome}', ''))), '^rejuderme[[:space:]]*[-:|][[:space:]]*', '') <> regexp_replace(lower(trim(coalesce(c_payload #>> '{formaFrete,nome}', c_payload #>> '{transportador,formaFrete,nome}', ''))), '^rejuderme[[:space:]]*[-:|][[:space:]]*', '')
+                   OR lower(trim(coalesce(a_payload #>> '{transportador,codigoRastreamento}', a_payload->>'codigoRastreamento', ''))) <> lower(trim(coalesce(c_payload #>> '{transportador,codigoRastreamento}', c_payload->>'codigoRastreamento', '')))
+                   OR lower(trim(coalesce(a_payload #>> '{ecommerce,numeroPedidoEcommerce}', a_payload->>'numeroPedidoEcommerce', ''))) <> lower(trim(coalesce(c_payload->>'numeroOrdemCompra', c_payload #>> '{ecommerce,numeroPedidoEcommerce}', '')))
             )
             SELECT
                 (SELECT COUNT(*)::int FROM public.jobs WHERE job_type = 'create_order_c' AND status = 'done' AND updated_at >= $1 AND updated_at < $2) AS export_completed,
                 (SELECT scheduled_export FROM origin_counts) AS scheduled_export,
                 (SELECT needs_adjustment FROM origin_counts) AS needs_adjustment,
                 (SELECT do_not_export FROM origin_counts) AS do_not_export,
-                (SELECT COUNT(*)::int FROM public.orders_map WHERE venda_c_id IS NOT NULL AND updated_at >= $1 AND updated_at < $2) AS synced,
-                (SELECT COUNT(*)::int FROM public.jobs WHERE status IN ('failed', 'dead', 'waiting_sku', 'skipped_not_mapped') AND updated_at >= $1 AND updated_at < $2) AS sync_errors,
+                (SELECT COUNT(*)::int FROM public.orders_map WHERE venda_c_id IS NOT NULL AND created_at >= $1 AND created_at < $2) AS synced,
+                (SELECT COUNT(*)::int FROM public.jobs WHERE status IN ('failed', 'dead', 'waiting_sku') AND job_type <> 'sync_nf_link') AS sync_errors,
                 (SELECT divergent FROM divergence_counts) AS divergent,
-                (SELECT COUNT(*)::int FROM public.cancelled_order_reviews WHERE status = 'pending' AND updated_at >= $1 AND updated_at < $2) AS cancelled_pending
+                (SELECT COUNT(*)::int FROM public.cancelled_order_reviews WHERE status = 'pending') AS cancelled_pending
         """, start_dt, end_dt)
 
     return {
@@ -1370,10 +1800,485 @@ async def admin_orders_panel_summary(
     }
 
 
+@app.get("/admin/orders-panel/origin-list")
+async def admin_orders_panel_origin_list(
+    category: str = "ready",
+    limit: int = 20,
+    offset: int = 0,
+    period: str = "today",
+    start: str | None = None,
+    end: str | None = None,
+):
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    start_dt, end_dt, _ = _dashboard_period(period, start, end)
+    items = await _origin_panel_items()
+
+    def in_period(item: dict) -> bool:
+        order_at = _parse_order_date(item.get("data"))
+        if not order_at:
+            raw = item.get("webhook_received_at") or item.get("updated_at")
+            order_at = raw if isinstance(raw, datetime) else None
+        return bool(order_at and start_dt <= order_at.astimezone(timezone.utc) < end_dt)
+
+    if category == "needs_adjustment":
+        filtered = [item for item in items if item.get("export_category") == "needs_adjustment"]
+    elif category == "do_not_export":
+        filtered = [item for item in items if item.get("export_category") == "do_not_export" and in_period(item)]
+    else:
+        filtered = [item for item in items if item.get("export_category") == "valid" and in_period(item)]
+    filtered.sort(
+        key=lambda item: item.get("webhook_received_at") or item.get("updated_at") or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    page = filtered[offset:offset + limit]
+    return {
+        "items": page,
+        "total": len(filtered),
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(page) < len(filtered),
+    }
+
+
+@app.post("/admin/orders-panel/origin/refresh-adjustments")
+async def admin_orders_panel_refresh_adjustments():
+    items = await _origin_panel_items(force=True)
+    ids = [
+        str(item["venda_a_id"])
+        for item in items
+        if item.get("export_category") == "needs_adjustment" and item.get("venda_a_id")
+    ]
+    if not ids:
+        return {"ok": True, "queued": 0, "candidates": 0}
+    batch_key = str(int(time.time()))
+    p = await get_pool()
+    async with p.acquire() as conn:
+        result = await conn.execute("""
+            INSERT INTO public.jobs (job_type, dedupe_key, status, payload, run_after, created_at, updated_at)
+            SELECT 'fetch_order_a',
+                   'panel:refresh_order_a:' || source.venda_a_id || ':' || $2,
+                   'queued',
+                   jsonb_build_object(
+                       'source', 'A', 'topic', 'vendas', 'venda_id', source.venda_a_id,
+                       'refresh_only', true, 'force_refresh', true, 'origin', 'panel_refresh_adjustments'
+                   ),
+                   NOW() + (((source.ord - 1) / 20)::int || ' minutes')::interval,
+                   NOW(), NOW()
+            FROM unnest($1::text[]) WITH ORDINALITY AS source(venda_a_id, ord)
+            ON CONFLICT (dedupe_key) DO NOTHING
+        """, ids, batch_key)
+    _invalidate_origin_panel_cache()
+    queued = int(result.split()[-1]) if result else 0
+    return {"ok": True, "queued": queued, "candidates": len(ids)}
+
+
+@app.get("/admin/orders-panel/synced-list")
+async def admin_orders_panel_synced_list(
+    limit: int = 20,
+    offset: int = 0,
+    period: str = "today",
+    start: str | None = None,
+    end: str | None = None,
+    status: str | None = None,
+):
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    status_filter = normalize_status(status) if status else None
+    start_dt, end_dt, _ = _dashboard_period(period, start, end)
+    p = await get_pool()
+    async with p.acquire() as conn:
+        mapped_product_rows = await conn.fetch("SELECT id_a FROM public.products_map WHERE id_c IS NOT NULL")
+        rows = await conn.fetch("""
+            WITH base AS (
+                SELECT om.external_key, om.venda_a_id, om.venda_c_id, om.created_at, om.updated_at,
+                       om.last_sync_status, om.last_sync_at,
+                       oas.webhook_payload, oas.fetched_payload, oas.fetched_at, oas.last_error,
+                       ocs.fetched_payload AS fetched_payload_c, ocs.fetched_at AS fetched_at_c,
+                       CASE
+                           WHEN (ocs.fetched_payload->>'situacao') ~ '^[0-9]+$' THEN
+                               CASE (ocs.fetched_payload->>'situacao')::int
+                                   WHEN 0 THEN 'em_aberto' WHEN 1 THEN 'faturado' WHEN 2 THEN 'cancelado'
+                                   WHEN 3 THEN 'aprovado' WHEN 4 THEN 'preparando_envio' WHEN 5 THEN 'enviado'
+                                   WHEN 6 THEN 'entregue' WHEN 7 THEN 'pronto_envio' WHEN 8 THEN 'dados_incompletos'
+                                   WHEN 9 THEN 'nao_entregue' ELSE ocs.fetched_payload->>'situacao'
+                               END
+                           ELSE COALESCE(lower(replace(ocs.fetched_payload->>'situacao', ' ', '_')), om.last_sync_status, 'em_aberto')
+                       END AS destination_status,
+                       latest.job_type AS latest_job_type,
+                       latest.status AS latest_job_status
+                FROM public.orders_map om
+                LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
+                LEFT JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = om.venda_c_id::text
+                LEFT JOIN LATERAL (
+                    SELECT j.job_type, j.status
+                    FROM public.jobs j
+                    WHERE j.payload->>'venda_a_id' = om.venda_a_id::text
+                       OR j.payload->>'venda_id' = om.venda_a_id::text
+                       OR j.payload->>'venda_c_id' = om.venda_c_id::text
+                    ORDER BY j.updated_at DESC NULLS LAST, j.id DESC
+                    LIMIT 1
+                ) latest ON true
+                WHERE om.venda_c_id IS NOT NULL
+                  AND om.created_at >= $1 AND om.created_at < $2
+            )
+            SELECT *, COUNT(*) OVER()::int AS filtered_total
+            FROM base
+            WHERE ($5::text IS NULL OR destination_status = $5)
+            ORDER BY created_at DESC, venda_a_id DESC
+            LIMIT $3 OFFSET $4
+        """, start_dt, end_dt, limit, offset, status_filter)
+        status_rows = await conn.fetch("""
+            SELECT COALESCE(
+                       CASE
+                           WHEN (ocs.fetched_payload->>'situacao') ~ '^[0-9]+$' THEN
+                               CASE (ocs.fetched_payload->>'situacao')::int
+                                   WHEN 0 THEN 'em_aberto' WHEN 1 THEN 'faturado' WHEN 2 THEN 'cancelado'
+                                   WHEN 3 THEN 'aprovado' WHEN 4 THEN 'preparando_envio' WHEN 5 THEN 'enviado'
+                                   WHEN 6 THEN 'entregue' WHEN 7 THEN 'pronto_envio' WHEN 8 THEN 'dados_incompletos'
+                                   WHEN 9 THEN 'nao_entregue' ELSE ocs.fetched_payload->>'situacao'
+                               END
+                           ELSE lower(replace(ocs.fetched_payload->>'situacao', ' ', '_'))
+                       END,
+                       om.last_sync_status,
+                       'em_aberto'
+                   ) AS status,
+                   COUNT(*)::int AS total
+            FROM public.orders_map om
+            LEFT JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = om.venda_c_id::text
+            WHERE om.venda_c_id IS NOT NULL
+              AND om.created_at >= $1 AND om.created_at < $2
+            GROUP BY 1
+            ORDER BY total DESC
+        """, start_dt, end_dt)
+    mapped_ids = {int(row["id_a"]) for row in mapped_product_rows if row["id_a"] is not None}
+    items = [_synced_panel_item(dict(row), mapped_ids) for row in rows]
+    total = int(rows[0]["filtered_total"] or 0) if rows else 0
+    return {
+        "items": items,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(items) < total,
+        "status_counts": [
+            {"key": normalize_status(row["status"]) or "em_aberto", "label": _status_label(row["status"]), "count": int(row["total"] or 0)}
+            for row in status_rows
+        ],
+    }
+
+
+@app.get("/admin/orders-panel/cancelled-list")
+async def admin_orders_panel_cancelled_list():
+    p = await get_pool()
+    async with p.acquire() as conn:
+        mapped_product_rows = await conn.fetch("SELECT id_a FROM public.products_map WHERE id_c IS NOT NULL")
+        rows = await conn.fetch("""
+            SELECT cr.status AS cancel_review_status, cr.created_at AS cancel_review_created_at,
+                   cr.reviewed_at AS cancel_reviewed_at, cr.updated_at AS cancel_review_updated_at,
+                   om.external_key, om.venda_a_id, om.venda_c_id, om.created_at, om.updated_at,
+                   om.last_sync_status, om.last_sync_at,
+                   oas.webhook_payload, oas.fetched_payload, oas.fetched_at, oas.last_error,
+                   ocs.fetched_payload AS fetched_payload_c, ocs.fetched_at AS fetched_at_c
+            FROM public.cancelled_order_reviews cr
+            LEFT JOIN public.orders_map om ON om.venda_a_id::text = cr.venda_a_id
+            LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = cr.venda_a_id
+            LEFT JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = om.venda_c_id::text
+            ORDER BY cr.updated_at DESC
+            LIMIT 1000
+        """)
+    mapped_ids = {int(row["id_a"]) for row in mapped_product_rows if row["id_a"] is not None}
+    items = [_synced_panel_item(dict(row), mapped_ids) for row in rows]
+    return {
+        "pending": [item for item in items if item.get("cancel_review_status") == "pending"],
+        "reviewed": [item for item in items if item.get("cancel_review_status") == "reviewed"],
+    }
+
+
+@app.get("/admin/orders-panel/webhooks")
+async def admin_orders_panel_webhooks(
+    limit: int = 10,
+    period: str = "today",
+    start: str | None = None,
+    end: str | None = None,
+    accounts: str | None = None,
+    types: str | None = None,
+    situations: str | None = None,
+    actions: str | None = None,
+    include_meta: bool = True,
+):
+    limit = max(10, min(limit, 100))
+    start_dt, end_dt, _ = _dashboard_period(period, start, end)
+    account_filters = [item.strip() for item in (accounts or "").split(",") if item.strip()]
+    type_filters = [item.strip() for item in (types or "").split(",") if item.strip()]
+    situation_filters = [item.strip() for item in (situations or "").split(",") if item.strip()]
+    action_filters = [item.strip() for item in (actions or "").split(",") if item.strip()]
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id, source, topic, venda_id, codigo_situacao, id_nota_fiscal, action_result, created_at
+            FROM public.events
+            WHERE created_at >= $1 AND created_at < $2
+              AND (COALESCE(array_length($4::text[], 1), 0) = 0 OR source = ANY($4::text[]))
+              AND (COALESCE(array_length($5::text[], 1), 0) = 0 OR topic = ANY($5::text[]))
+              AND (COALESCE(array_length($6::text[], 1), 0) = 0 OR codigo_situacao = ANY($6::text[]))
+              AND (COALESCE(array_length($7::text[], 1), 0) = 0 OR action_result = ANY($7::text[]))
+            ORDER BY created_at DESC, id DESC
+            LIMIT $3
+        """, start_dt, end_dt, limit, account_filters, type_filters, situation_filters, action_filters)
+        counts = None
+        options = None
+        if include_meta:
+            counts = await conn.fetchrow("""
+                SELECT
+                    (SELECT COUNT(*)::int FROM public.events WHERE created_at >= $1 AND created_at < $2) AS webhooks,
+                    (SELECT COUNT(*)::int FROM public.jobs WHERE status = 'done' AND updated_at >= $1 AND updated_at < $2) AS executed,
+                    (SELECT COUNT(*)::int FROM public.jobs WHERE status IN ('queued', 'running')) AS future,
+                    (SELECT COUNT(*)::int FROM public.jobs WHERE status IN ('failed', 'dead', 'waiting_sku') AND job_type <> 'sync_nf_link') AS error
+            """, start_dt, end_dt)
+            options = await conn.fetchrow("""
+                SELECT
+                    array_remove(array_agg(DISTINCT source), NULL) AS accounts,
+                    array_remove(array_agg(DISTINCT topic), NULL) AS types,
+                    array_remove(array_agg(DISTINCT codigo_situacao), NULL) AS situations,
+                    array_remove(array_agg(DISTINCT action_result), NULL) AS actions
+                FROM public.events
+                WHERE created_at >= $1 AND created_at < $2
+            """, start_dt, end_dt)
+    items = [dict(row) for row in rows]
+    return {
+        "items": items,
+        "total": len(items),
+        "counts": (
+            {key: int(counts[key] or 0) for key in ("webhooks", "executed", "future", "error")}
+            if counts else {}
+        ),
+        "options": (
+            {key: list(options[key] or []) for key in ("accounts", "types", "situations", "actions")}
+            if options else {}
+        ),
+    }
+
+
+def _error_job_checkable(item: dict) -> bool:
+    job_type = str(item.get("job_type") or "")
+    last_error = str(item.get("last_error") or "")
+    job_payload = _json_payload(item.get("payload"))
+    has_mapping = bool(item.get("mapped_a_id") and item.get("mapped_c_id"))
+    if job_type == "create_order_c":
+        # The worker fetches the complete order from Tiny A again before
+        # validating it. A stale snapshot must not prevent that verification.
+        if item.get("mapped_c_id") or "409" in last_error:
+            return False
+        return bool(item.get("venda_a_id") or item.get("mapped_a_id"))
+    if job_type == "fetch_order_a":
+        return "404" not in last_error and bool(item.get("venda_a_id"))
+    if job_type in {"sync_status", "sync_tracking_c_to_a", "sync_order_fields"}:
+        if (
+            job_type == "sync_status"
+            and job_payload.get("source") == "A"
+            and normalize_status(job_payload.get("codigo_situacao")) == "cancelado"
+        ):
+            return False
+        return has_mapping
+    if job_type == "add_tag_a":
+        return bool(item.get("venda_a_id") or item.get("mapped_a_id"))
+    if job_type == "add_tag_c":
+        return bool(item.get("venda_c_id") or item.get("mapped_c_id"))
+    if job_type == "sync_nf_link":
+        return False
+    return True
+
+
+async def _panel_error_jobs() -> list[dict]:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            WITH base AS (
+                SELECT j.*,
+                       COALESCE(j.payload->>'venda_a_id', CASE WHEN j.payload->>'source' = 'A' THEN j.payload->>'venda_id' END) AS venda_a_id,
+                       COALESCE(j.payload->>'venda_c_id', CASE WHEN j.payload->>'source' = 'B' THEN j.payload->>'venda_id' END) AS venda_c_id
+                FROM public.jobs j
+                WHERE j.status IN ('failed', 'dead', 'waiting_sku')
+                  AND j.job_type <> 'sync_nf_link'
+            )
+            SELECT base.id, base.job_type, base.status, base.payload, base.attempts, base.last_error,
+                   base.created_at, base.updated_at, base.venda_a_id, base.venda_c_id,
+                   om.venda_a_id::text AS mapped_a_id, om.venda_c_id::text AS mapped_c_id,
+                   oas.webhook_payload, oas.fetched_payload, oas.fetched_at, oas.last_error AS snapshot_last_error,
+                   ocs.fetched_payload AS fetched_payload_c
+            FROM base
+            LEFT JOIN public.orders_map om
+              ON (base.venda_a_id IS NOT NULL AND om.venda_a_id::text = base.venda_a_id)
+              OR (base.venda_c_id IS NOT NULL AND om.venda_c_id::text = base.venda_c_id)
+            LEFT JOIN public.orders_a_snapshot oas ON oas.venda_a_id = COALESCE(base.venda_a_id, om.venda_a_id::text)
+            LEFT JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = COALESCE(base.venda_c_id, om.venda_c_id::text)
+            ORDER BY base.updated_at DESC, base.id DESC
+            LIMIT 2000
+        """)
+    return [dict(row) for row in rows]
+
+
+@app.get("/admin/orders-panel/errors/summary")
+async def admin_orders_panel_errors_summary():
+    rows = await _panel_error_jobs()
+    groups: dict[str, dict] = {}
+    for item in rows:
+        job_type = str(item.get("job_type") or "desconhecido")
+        group = groups.setdefault(job_type, {
+            "job_type": job_type,
+            "label": _queue_task_label(job_type),
+            "count": 0,
+            "checkable": 0,
+            "sample_error": item.get("last_error"),
+        })
+        group["count"] += 1
+        if _error_job_checkable(item):
+            group["checkable"] += 1
+    return {"types": sorted(groups.values(), key=lambda value: (-value["count"], value["label"]))}
+
+
+@app.post("/admin/orders-panel/errors/retry")
+async def admin_orders_panel_errors_retry(request: Request):
+    payload = await request.json()
+    selected = {str(value) for value in (payload.get("job_types") or []) if value}
+    if not selected:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Selecione ao menos um tipo de tarefa."})
+    rows = await _panel_error_jobs()
+    candidates = [item for item in rows if item.get("job_type") in selected]
+    retry_ids = [int(item["id"]) for item in candidates if _error_job_checkable(item)]
+    if retry_ids:
+        p = await get_pool()
+        async with p.acquire() as conn:
+            await conn.execute("""
+                UPDATE public.jobs j
+                SET status = 'queued', attempts = 0, last_error = NULL,
+                    locked_at = NULL, locked_by = NULL,
+                    run_after = NOW() + (((selected.ord - 1) / 20)::int || ' minutes')::interval,
+                    updated_at = NOW()
+                FROM unnest($1::int[]) WITH ORDINALITY AS selected(id, ord)
+                WHERE j.id = selected.id
+            """, retry_ids)
+    return {
+        "ok": True,
+        "selected_job_types": sorted(selected),
+        "checked": len(candidates),
+        "queued": len(retry_ids),
+        "still_blocked": len(candidates) - len(retry_ids),
+    }
+
+
+@app.get("/admin/orders-panel/divergences/types")
+async def admin_orders_panel_divergence_types():
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT om.venda_a_id, om.venda_c_id,
+                   oas.webhook_payload, oas.fetched_payload, oas.fetched_at,
+                   ocs.fetched_payload AS fetched_payload_c
+            FROM public.orders_map om
+            JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
+            JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = om.venda_c_id::text
+            WHERE om.venda_a_id IS NOT NULL AND om.venda_c_id IS NOT NULL
+              AND oas.fetched_payload IS NOT NULL AND ocs.fetched_payload IS NOT NULL
+        """)
+    counts: dict[str, dict] = {}
+    divergent_orders = 0
+    non_syncable = {"itens"}
+    for row in rows:
+        origin = _snapshot_order_payload(dict(row))
+        destination = _json_payload(row["fetched_payload_c"])
+        fields = [field for field in _comparison_fields(origin, destination) if field["divergent"]]
+        if fields:
+            divergent_orders += 1
+        for field in fields:
+            entry = counts.setdefault(field["key"], {
+                "key": field["key"], "label": field["label"], "count": 0,
+                "syncable": field["key"] not in non_syncable,
+            })
+            entry["count"] += 1
+    return {
+        "orders": divergent_orders,
+        "types": sorted(counts.values(), key=lambda value: (-value["count"], value["label"])),
+    }
+
+
+@app.post("/admin/orders-panel/divergences/sync-selected")
+async def admin_orders_panel_sync_selected_divergences(request: Request):
+    body = await request.json()
+    selected_keys = [str(key) for key in (body.get("field_keys") or []) if key]
+    allowed_keys = {
+        "nome", "cpf", "situacao", "cep_entrega", "cidade_entrega", "uf_entrega",
+        "numero_endereco", "complemento_endereco", "forma_envio", "forma_frete",
+        "codigo_rastreamento", "numero_ecommerce",
+    }
+    selected_keys = [key for key in selected_keys if key in allowed_keys]
+    if not selected_keys:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Selecione ao menos um tipo sincronizável."})
+
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT om.venda_a_id, om.venda_c_id,
+                   oas.webhook_payload, oas.fetched_payload, oas.fetched_at,
+                   ocs.fetched_payload AS fetched_payload_c
+            FROM public.orders_map om
+            JOIN public.orders_a_snapshot oas ON oas.venda_a_id = om.venda_a_id::text
+            JOIN public.orders_c_snapshot ocs ON ocs.venda_c_id = om.venda_c_id::text
+            WHERE om.venda_a_id IS NOT NULL AND om.venda_c_id IS NOT NULL
+              AND oas.fetched_payload IS NOT NULL AND ocs.fetched_payload IS NOT NULL
+        """)
+
+    candidates = 0
+    dedupe_keys: list[str] = []
+    job_payloads: list[str] = []
+    batch_stamp = int(time.time())
+    field_hash = hashlib.sha1(",".join(sorted(selected_keys)).encode("utf-8")).hexdigest()[:10]
+    for row in rows:
+        source_payload = _snapshot_order_payload(dict(row))
+        destination_payload = _json_payload(row["fetched_payload_c"])
+        divergent_keys = [
+            field["key"] for field in _comparison_fields(source_payload, destination_payload)
+            if field["divergent"] and field["key"] in selected_keys
+        ]
+        if not divergent_keys:
+            continue
+        candidates += 1
+        venda_a_id = str(row["venda_a_id"])
+        venda_c_id = str(row["venda_c_id"])
+        dedupe_keys.append(f"panel:sync_order_fields:{venda_a_id}:{venda_c_id}:{field_hash}:{batch_stamp}")
+        job_payloads.append(json.dumps({
+            "source": "panel",
+            "mode": "newer_wins",
+            "venda_a_id": venda_a_id,
+            "venda_c_id": venda_c_id,
+            "field_keys": divergent_keys,
+        }, ensure_ascii=False))
+
+    created = 0
+    if dedupe_keys:
+        p = await get_pool()
+        async with p.acquire() as conn:
+            result = await conn.execute("""
+                INSERT INTO public.jobs (job_type, dedupe_key, status, payload, run_after, created_at, updated_at)
+                SELECT 'sync_order_fields', source.dedupe_key, 'queued', source.payload::jsonb,
+                       NOW() + (((source.ord - 1) / 20)::int || ' minutes')::interval,
+                       NOW(), NOW()
+                FROM unnest($1::text[], $2::text[]) WITH ORDINALITY AS source(dedupe_key, payload, ord)
+                ON CONFLICT (dedupe_key) DO NOTHING
+            """, dedupe_keys, job_payloads)
+        created = int(result.split()[-1]) if result else 0
+    return {
+        "ok": True,
+        "selected_field_keys": selected_keys,
+        "candidates": candidates,
+        "created": created,
+    }
+
+
 @app.get("/admin/orders-panel/queue-data")
 async def admin_orders_panel_queue_data(
     limit: int = 120,
-    period: str = "last_30",
+    period: str = "today",
     start: str | None = None,
     end: str | None = None,
     types: str | None = None,
@@ -1437,17 +2342,18 @@ async def admin_orders_panel_queue_data(
                 omc.venda_c_id::text
             )
             WHERE (
-                    j.status IN ('queued', 'running')
-                    OR COALESCE(j.run_after, j.updated_at, j.created_at) >= $2
-                   )
-              AND COALESCE(j.run_after, j.updated_at, j.created_at) < $3
+                    j.status IN ('queued', 'running', 'failed', 'dead', 'waiting_sku')
+                    OR (j.updated_at >= $2 AND j.updated_at < $3)
+                  )
+              AND NOT (j.job_type = 'sync_nf_link' AND j.status IN ('failed', 'dead', 'waiting_sku'))
+              AND j.status <> 'skipped_not_mapped'
               AND (COALESCE(array_length($4::text[], 1), 0) = 0 OR j.job_type = ANY($4::text[]))
               AND (COALESCE(array_length($5::text[], 1), 0) = 0 OR j.status = ANY($5::text[]))
               AND (
                     COALESCE(array_length($6::text[], 1), 0) = 0
                     OR j.payload::jsonb->>'source' = ANY($6::text[])
                   )
-            ORDER BY COALESCE(j.run_after, j.updated_at, j.created_at) DESC
+            ORDER BY CASE WHEN j.status IN ('queued', 'running') THEN COALESCE(j.run_after, j.created_at) ELSE COALESCE(j.updated_at, j.created_at) END DESC
             LIMIT $1
         """, limit, start_dt, end_dt, type_filters, raw_status_filters, account_filters)
         mapped_product_rows = await conn.fetch("""
@@ -1455,12 +2361,13 @@ async def admin_orders_panel_queue_data(
             FROM public.products_map
             WHERE id_c IS NOT NULL
         """)
-        event_rows = await conn.fetch("""
-            SELECT id, source, topic, venda_id, codigo_situacao, id_nota_fiscal, action_result, created_at
-            FROM public.events
-            ORDER BY created_at DESC
-            LIMIT 100
-        """)
+        count_row = await conn.fetchrow("""
+            SELECT
+                (SELECT COUNT(*)::int FROM public.events WHERE created_at >= $1 AND created_at < $2) AS webhooks,
+                (SELECT COUNT(*)::int FROM public.jobs WHERE status = 'done' AND updated_at >= $1 AND updated_at < $2) AS executed,
+                (SELECT COUNT(*)::int FROM public.jobs WHERE status IN ('queued', 'running')) AS future,
+                (SELECT COUNT(*)::int FROM public.jobs WHERE status IN ('failed', 'dead', 'waiting_sku') AND job_type <> 'sync_nf_link') AS error
+        """, start_dt, end_dt)
 
     mapped_product_ids = {int(row["id_a"]) for row in mapped_product_rows if row["id_a"] is not None}
     now = datetime.now(timezone.utc)
@@ -1470,7 +2377,7 @@ async def admin_orders_panel_queue_data(
     for row in queue_rows:
         item = dict(row)
         payload = _json_payload(item.get("payload"))
-        scheduled_at = item.get("run_after") or item.get("created_at")
+        scheduled_at = (item.get("run_after") if item.get("status") in {"queued", "running"} else item.get("updated_at")) or item.get("created_at")
         if scheduled_at and scheduled_at.tzinfo is None:
             scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
         window_start = _window_start_10min(scheduled_at)
@@ -1485,7 +2392,7 @@ async def admin_orders_panel_queue_data(
             "fetched_payload": origin_payload,
             "updated_at": item.get("updated_at"),
         }, mapped_product_ids)
-        destination_fields = _order_display_fields(destination_payload)
+        destination_fields = _order_display_fields(destination_payload, fallback_to_customer_address=True)
         destination_status = normalize_status(destination_payload.get("situacao") if isinstance(destination_payload, dict) else None)
         queue_item = {
             "id": item.get("id"),
@@ -1497,10 +2404,11 @@ async def admin_orders_panel_queue_data(
             "window_start": window_start,
             "window_end": window_end,
             "window_key": window_key,
-            "is_future": bool(scheduled_at and scheduled_at > now + timedelta(minutes=10)),
+            "is_future": item.get("status") in {"queued", "running"},
             "task_label": _queue_task_label(item.get("job_type")),
             "task_status": status_label,
             "task_status_raw": item.get("status"),
+            "status": item.get("status"),
             "attempts": item.get("attempts") or 0,
             "last_error": item.get("last_error"),
             "last_sync_at": item.get("updated_at"),
@@ -1539,14 +2447,14 @@ async def admin_orders_panel_queue_data(
         group["remaining_a"] = max(0, group["limit_a"] - group["planned_a"])
         group["remaining_c"] = max(0, group["limit_c"] - group["planned_c"])
         queue_groups.append(group)
-    queue_groups.sort(key=lambda g: g.get("window_start") or datetime.max.replace(tzinfo=timezone.utc))
+    queue_groups.sort(key=lambda g: g.get("window_start") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     return {
         "queue": {
             "items": queue_items,
             "groups": queue_groups,
             "write_limit_10min": queue_limit_10min,
         },
-        "events": [dict(row) for row in event_rows],
+        "counts": {key: int(count_row[key] or 0) for key in ("webhooks", "executed", "future", "error")},
     }
 
 
@@ -1559,7 +2467,7 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
     p = await get_pool()
     async with p.acquire() as conn:
         origin_rows = await conn.fetch("""
-            SELECT so.venda_a_id, so.webhook_payload, so.fetched_payload, so.created_at, so.updated_at,
+            SELECT so.venda_a_id, so.webhook_payload, so.fetched_payload, so.fetched_at, so.created_at, so.updated_at,
                    so.updated_at AS webhook_received_at,
                    NULL::timestamptz AS approval_scheduled_at,
                    NULL::timestamptz AS transfer_scheduled_at
@@ -1709,7 +2617,7 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
         }, mapped_product_ids)
         item.update(origin_summary)
         destination_payload = _json_payload(item.get("fetched_payload_c"))
-        destination_fields = _order_display_fields(destination_payload)
+        destination_fields = _order_display_fields(destination_payload, fallback_to_customer_address=True)
         destination_status = normalize_status(destination_payload.get("situacao") if isinstance(destination_payload, dict) else None)
         destination_status = destination_status or normalize_status(item.get("last_sync_status")) or "em_aberto"
         item["situacao_destino"] = destination_status
@@ -1718,8 +2626,10 @@ async def admin_orders_panel_data(limit: int = 240, days: int = 30, divergence_l
         item["numero_destino"] = destination_fields.get("numero_pedido")
         item["destination_snapshot_at"] = item.get("fetched_at_c")
         item["forma_envio_divergent"] = (
-            _normalize_text(origin_summary.get("forma_envio")) != _normalize_text(destination_fields.get("forma_envio"))
-            or _normalize_text(origin_summary.get("forma_frete")) != _normalize_text(destination_fields.get("forma_frete"))
+            normalize_shipping_label(origin_summary.get("forma_envio"))
+            != normalize_shipping_label(destination_fields.get("forma_envio"))
+            or normalize_shipping_label(origin_summary.get("forma_frete"))
+            != normalize_shipping_label(destination_fields.get("forma_frete"))
         )
         item["codigo_rastreamento_divergent"] = (
             _normalize_text(origin_summary.get("codigo_rastreamento")) != _normalize_text(destination_fields.get("codigo_rastreamento"))
@@ -1959,6 +2869,7 @@ async def admin_orders_panel_sync_origin_list(
     max_pages: int = 200,
     start_offset: int = 0,
     sleep_ms: int = 800,
+    situacao: int | None = None,
 ):
     from app.tiny_oauth import ensure_access_token
     from app.tiny_client import TinyApiError, TinyClient
@@ -1993,6 +2904,7 @@ async def admin_orders_panel_sync_origin_list(
                     data_final=data_final,
                     limit=page_limit,
                     offset=offset,
+                    situacao=situacao,
                 )
             except TinyApiError as exc:
                 return JSONResponse(status_code=200, content={
@@ -2001,8 +2913,9 @@ async def admin_orders_panel_sync_origin_list(
                     "tiny_status": exc.status_code,
                     "tiny_response": str(exc)[:500],
                     "failed_offset": offset,
-                    "resume_url": f"/admin/orders-panel/origin/sync-list?days={days}&max_pages={max_pages}&start_offset={offset}&sleep_ms={sleep_ms}",
+                    "resume_url": f"/admin/orders-panel/origin/sync-list?days={days}&max_pages={max_pages}&start_offset={offset}&sleep_ms={sleep_ms}" + (f"&situacao={situacao}" if situacao is not None else ""),
                     "days": days,
+                    "situacao": situacao,
                     "data_inicial": data_inicial,
                     "data_final": data_final,
                     "remote_total": total_remote,
@@ -2070,6 +2983,7 @@ async def admin_orders_panel_sync_origin_list(
     return {
         "ok": True,
         "days": days,
+        "situacao": situacao,
         "data_inicial": data_inicial,
         "data_final": data_final,
         "remote_total": total_remote,
@@ -2100,7 +3014,7 @@ async def admin_orders_panel_export_ready(days: int = 60, cutoff: str = "2026-07
         """)
         mapped_product_ids = {int(row["id_a"]) for row in mapped_product_rows if row["id_a"] is not None}
         rows = await conn.fetch("""
-            SELECT so.venda_a_id, so.webhook_payload, so.fetched_payload, so.created_at, so.updated_at,
+            SELECT so.venda_a_id, so.webhook_payload, so.fetched_payload, so.fetched_at, so.created_at, so.updated_at,
                    so.updated_at AS webhook_received_at,
                    NULL::timestamptz AS approval_scheduled_at,
                    NULL::timestamptz AS transfer_scheduled_at
@@ -2237,6 +3151,156 @@ async def admin_orders_panel_export_ready_status():
     }
 
 
+@app.post("/admin/orders-panel/origin/export-approved-before")
+async def admin_orders_panel_export_approved_before(
+    cutoff: str = "2026-07-12",
+    days: int = 90,
+    limit: int = 10000,
+    dry_run: bool = False,
+):
+    days = max(1, min(days, 365))
+    limit = max(1, min(limit, 20000))
+    cutoff_dt = _parse_order_date(cutoff)
+    if not cutoff_dt:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "cutoff invalido. Use YYYY-MM-DD."})
+
+    p = await get_pool()
+    async with p.acquire() as conn:
+        mapped_product_rows = await conn.fetch("""
+            SELECT id_a
+            FROM public.products_map
+            WHERE id_c IS NOT NULL
+        """)
+        mapped_product_ids = {int(row["id_a"]) for row in mapped_product_rows if row["id_a"] is not None}
+        rows = await conn.fetch("""
+            SELECT so.venda_a_id, so.webhook_payload, so.fetched_payload, so.fetched_at, so.created_at, so.updated_at,
+                   so.updated_at AS webhook_received_at,
+                   NULL::timestamptz AS approval_scheduled_at,
+                   NULL::timestamptz AS transfer_scheduled_at
+            FROM public.orders_a_snapshot so
+            LEFT JOIN public.orders_map om ON om.venda_a_id::text = so.venda_a_id::text
+            WHERE om.venda_a_id IS NULL
+              AND so.updated_at >= NOW() - ($1::int || ' days')::interval
+            ORDER BY so.updated_at ASC
+            LIMIT $2
+        """, days, limit)
+
+    total_approved = 0
+    eligible = 0
+    queued = 0
+    already_had_job = 0
+    oldest_order_date = None
+    not_sent = []
+    existing_job_statuses = {}
+    sample_jobs = []
+
+    for row in rows:
+        summary = _order_summary_from_snapshot(dict(row), mapped_product_ids)
+        venda_a_id = str(summary.get("venda_a_id") or "")
+        if not venda_a_id:
+            continue
+        status = summary.get("situacao_normalized")
+        order_dt = _parse_order_date(summary.get("data_hora") or summary.get("data"))
+        if status != "aprovado" or not order_dt or order_dt.date() > cutoff_dt.date():
+            continue
+
+        total_approved += 1
+        if oldest_order_date is None or order_dt.date() < oldest_order_date:
+            oldest_order_date = order_dt.date()
+
+        if not summary.get("valid_for_export"):
+            not_sent.append({
+                "venda_a_id": venda_a_id,
+                "data": summary.get("data"),
+                "reason": "nao_valido_para_exportacao",
+                "reasons": summary.get("reasons") or [],
+            })
+            continue
+
+        eligible += 1
+        dedupe_key = f"A:vendas:{venda_a_id}:create_order_c"
+        payload = {
+            "source": "A",
+            "topic": "vendas",
+            "venda_id": venda_a_id,
+            "codigo_situacao": "aprovado",
+            "origin": "admin_export_approved_before",
+            "cutoff": cutoff_dt.date().isoformat(),
+        }
+        created = False if dry_run else await insert_job(job_type="create_order_c", dedupe_key=dedupe_key, event_id=None, payload=payload)
+        if dry_run or created:
+            queued += 1
+            if len(sample_jobs) < 20:
+                sample_jobs.append({"venda_a_id": venda_a_id, "data": summary.get("data"), "job_type": "create_order_c"})
+        else:
+            already_had_job += 1
+            p = await get_pool()
+            async with p.acquire() as conn:
+                existing = await conn.fetchrow("""
+                    SELECT status
+                    FROM public.jobs
+                    WHERE dedupe_key = $1
+                """, dedupe_key)
+            existing_status = existing["status"] if existing else "sem_job"
+            existing_job_statuses[existing_status] = existing_job_statuses.get(existing_status, 0) + 1
+
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "cutoff": cutoff_dt.date().isoformat(),
+        "days": days,
+        "scanned_unsynced_snapshots": len(rows),
+        "total_approved_on_or_before_cutoff": total_approved,
+        "oldest_order_date": oldest_order_date.isoformat() if oldest_order_date else None,
+        "eligible_to_queue": eligible,
+        "queued_create_order_c": queued,
+        "already_had_job_or_not_requeued": already_had_job,
+        "existing_job_statuses": existing_job_statuses,
+        "not_sent_count": len(not_sent),
+        "not_sent_sample": not_sent[:50],
+        "sample_jobs": sample_jobs,
+    }
+
+
+@app.get("/admin/orders-panel/origin/export-approved-before/status")
+async def admin_orders_panel_export_approved_before_status(cutoff: str = "2026-07-12"):
+    p = await get_pool()
+    async with p.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT j.job_type, j.status, COUNT(*)::int AS total
+            FROM public.jobs j
+            WHERE j.payload::jsonb->>'origin' = 'admin_export_approved_before'
+              AND j.payload::jsonb->>'cutoff' = $1
+            GROUP BY j.job_type, j.status
+            ORDER BY j.job_type, j.status
+        """, cutoff)
+        details = await conn.fetch("""
+            SELECT j.id,
+                   j.status,
+                   j.payload::jsonb->>'venda_id' AS venda_a_id,
+                   om.venda_c_id::text AS venda_c_id,
+                   j.last_error,
+                   j.updated_at,
+                   j.action_preview
+            FROM public.jobs j
+            LEFT JOIN public.orders_map om
+              ON om.venda_a_id::text = j.payload::jsonb->>'venda_id'
+            WHERE j.payload::jsonb->>'origin' = 'admin_export_approved_before'
+              AND j.payload::jsonb->>'cutoff' = $1
+            ORDER BY j.updated_at DESC NULLS LAST, j.created_at DESC
+        """, cutoff)
+    detail_dicts = [dict(row) for row in details]
+    return {
+        "ok": True,
+        "cutoff": cutoff,
+        "counts": [dict(row) for row in rows],
+        "total_jobs": len(detail_dicts),
+        "mapped_to_c": sum(1 for row in detail_dicts if row.get("venda_c_id")),
+        "not_mapped_to_c": sum(1 for row in detail_dicts if not row.get("venda_c_id")),
+        "details": detail_dicts,
+    }
+
+
 @app.post("/admin/orders-panel/origin/export-ready/adopt-chained")
 async def admin_orders_panel_export_ready_adopt_chained():
     p = await get_pool()
@@ -2288,12 +3352,12 @@ async def admin_orders_panel_detail(venda_a_id: str | None = None, venda_c_id: s
             venda_c_id = payload.get("venda_c_id")
         if venda_a_id:
             origin_row = await conn.fetchrow("""
-                SELECT fetched_payload, webhook_payload
+                SELECT fetched_payload, webhook_payload, fetched_at
                 FROM public.orders_a_snapshot
                 WHERE venda_a_id = $1
             """, str(venda_a_id))
             if origin_row:
-                origin_payload = _json_payload(origin_row["fetched_payload"]) or _json_payload(origin_row["webhook_payload"])
+                origin_payload = _snapshot_order_payload(dict(origin_row))
             mapping = await conn.fetchrow("""
                 SELECT external_key, venda_a_id, venda_c_id, created_at, updated_at, last_sync_status, last_sync_at
                 FROM public.orders_map
@@ -2479,7 +3543,7 @@ async def admin_tiny_c_order(venda_id: str):
 
     token = await ensure_access_token("B")
     if not token:
-        return {"ok": False, "error": "No valid token for Tiny C — refaça o OAuth em /auth/c/start"}
+        return {"ok": False, "error": "No valid token for Tiny C — refaça o OAuth em /auth/v365/start"}
 
     url = f"https://api.tiny.com.br/public-api/v3/pedidos/{venda_id}"
     headers = {"Authorization": f"Bearer {token}"}
@@ -2506,7 +3570,7 @@ async def admin_tiny_c_orders(ids: str):
 
     token = await ensure_access_token("B")
     if not token:
-        return {"ok": False, "error": "No valid token for Tiny C — refaça o OAuth em /auth/c/start"}
+        return {"ok": False, "error": "No valid token for Tiny C — refaça o OAuth em /auth/v365/start"}
 
     headers = {"Authorization": f"Bearer {token}"}
     results = []
@@ -2604,6 +3668,15 @@ async def admin_tokens_health():
 async def dashboard():
     html_path = Path(__file__).parent / "static" / "dashboard.html"
     return HTMLResponse(content=html_path.read_text(encoding="utf-8"), headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/admin/dashboard.js")
+async def dashboard_script():
+    return FileResponse(
+        Path(__file__).parent / "static" / "dashboard.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/admin/server-info")
@@ -2717,6 +3790,7 @@ async def admin_dashboard():
     return data
 
 
+@app.get("/auth/rj/start")
 @app.get("/auth/a/start")
 async def auth_a_start():
     from fastapi.responses import RedirectResponse
@@ -2727,6 +3801,7 @@ async def auth_a_start():
     return RedirectResponse(url=url, status_code=302)
 
 
+@app.get("/auth/v365/start")
 @app.get("/auth/c/start")
 async def auth_c_start():
     from fastapi.responses import RedirectResponse
@@ -2737,6 +3812,7 @@ async def auth_c_start():
     return RedirectResponse(url=url, status_code=302)
 
 
+@app.get("/auth/rj/callback")
 @app.get("/auth/a/callback")
 async def auth_a_callback(code: str | None = None, error: str | None = None, error_description: str | None = None):
     from app.tiny_oauth import exchange_code_for_tokens, save_tokens_to_db
@@ -2762,6 +3838,7 @@ async def auth_a_callback(code: str | None = None, error: str | None = None, err
         return {"error": str(e)}
 
 
+@app.get("/auth/v365/callback")
 @app.get("/auth/c/callback")
 async def auth_c_callback(code: str | None = None, error: str | None = None, error_description: str | None = None):
     from app.tiny_oauth import exchange_code_for_tokens, save_tokens_to_db

@@ -12,6 +12,8 @@ wheels/
 
 # Environment
 .env
+.env.*
+!.env.example
 .fly-token
 
 # Cache

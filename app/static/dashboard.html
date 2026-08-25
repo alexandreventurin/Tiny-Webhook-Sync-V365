@@ -5,277 +5,34 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Gestão de Pedidos Rejuderme</title>
 <style>
-*{box-sizing:border-box}body{margin:0;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f4f6f8;color:#172033}.topbar{min-height:62px;background:#172033;color:#fff;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 22px;border-bottom:1px solid #0f172a}.brand{display:flex;align-items:baseline;gap:12px}.brand h1{margin:0;font-size:18px;font-weight:800}.brand span{font-size:12px;color:#9fb0c5}.nav{display:flex;align-items:center;gap:10px}.nav a,.nav button{border:0;background:#26364a;color:#dbe7f5;border-radius:6px;padding:8px 11px;text-decoration:none;font-size:13px;cursor:pointer}.nav a:hover,.nav button:hover{background:#334a65;color:#fff}
-.auth-mini{display:flex;align-items:center;gap:8px;flex:1;justify-content:center;min-width:0}.auth-mini-card{display:flex;align-items:center;gap:7px;min-width:155px;max-width:230px;height:34px;border:1px solid rgba(255,255,255,.16);background:#26364a;border-radius:7px;padding:0 8px;color:#dbe7f5}.auth-mini-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}.auth-mini-card.ok .auth-mini-dot{background:#22c55e}.auth-mini-card.expired .auth-mini-dot{background:#ef4444}.auth-mini-card.missing .auth-mini-dot{background:#94a3b8}.auth-mini-text{min-width:0;flex:1}.auth-mini-name{font-size:11px;font-weight:800;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.auth-mini-detail{font-size:10px;color:#aebdd0;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.auth-mini-link{border:0;background:#334a65;color:#fff;border-radius:5px;padding:5px 7px;text-decoration:none;font-size:10px;font-weight:800;white-space:nowrap}.auth-mini-link:hover{background:#3f5877}
-.shell{display:grid;grid-template-columns:240px 1fr;min-height:calc(100vh - 62px)}.side{background:#fff;border-right:1px solid #d9e1ea;padding:14px}.side button,.side a{width:100%;display:block;text-align:left;border:0;background:transparent;color:#334155;border-radius:7px;padding:10px 11px;font-size:14px;font-weight:800;text-decoration:none;cursor:pointer}.side button:hover,.side a:hover{background:#f1f5f9}.side button.active{background:#1f3a5f;color:#fff}.side .group{margin-top:12px;padding:0 11px 5px;color:#64748b;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}.content{padding:18px;min-width:0}
-.period{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.period-title{display:flex;align-items:center;gap:8px;color:#536274;font-size:13px;font-weight:800}.period-pill{height:34px;border:1px solid #9cc5ff;background:#eaf2ff;color:#17437a;border-radius:6px;padding:0 11px;font-size:13px;font-weight:800;cursor:pointer}.collapse-btn{height:34px;border:1px solid #cbd5e1;background:#fff;color:#26364a;border-radius:6px;padding:0 10px;font-size:12px;font-weight:800;cursor:pointer}.period-controls{display:none;grid-template-columns:repeat(3,minmax(160px,1fr));gap:10px;align-items:start;background:#fff;border:1px solid #d9e1ea;border-radius:8px;padding:10px;margin-bottom:14px}.period-controls.open{display:grid}.period-group{display:grid;grid-template-columns:1fr 1fr;gap:6px}.period-group strong{grid-column:1/-1;color:#64748b;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}.period-controls button,.period-controls input{height:36px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#26364a;padding:0 10px;font-size:13px;font-weight:700}.period-controls button{cursor:pointer}.period-controls button.active{background:#1f3a5f;color:#fff;border-color:#1f3a5f}.period-controls label{display:grid;gap:4px;font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase}.period-range{display:grid;grid-template-columns:1fr 1fr;gap:8px}.period-range strong{grid-column:1/-1;color:#64748b;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}.period-note{grid-column:1/-1;display:none;color:#be123c;font-size:12px;font-weight:700}.period-note.open{display:block}
-.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:12px;margin-bottom:14px}.summary-grid.collapsed{display:none}.metric{border:1px solid #d9e1ea;border-radius:8px;padding:14px;min-height:104px;display:flex;flex-direction:column;justify-content:space-between}.metric .value{font-size:29px;font-weight:850;color:#172033}.metric .label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#334155;margin-top:4px;line-height:1.25}.metric.blue{background:#cfe3ff;border-color:#7fb2ff}.metric.green{background:#c8f0d6;border-color:#75d994}.metric.orange{background:#ffe0b3;border-color:#ffb75d}.metric.gray{background:#dde5ef;border-color:#acb8c8}.metric.red{background:#ffd1d1;border-color:#ff8a8a}.metric.purple{background:#ded2ff;border-color:#ad93ff}.metric.teal{background:#c5f0e9;border-color:#67d4c7}.metric button{align-self:flex-start;margin-top:10px;height:28px;border:1px solid rgba(15,23,42,.12);background:#fff;border-radius:6px;padding:0 10px;font-size:12px;font-weight:800;color:#26364a;cursor:pointer}
-.toolbar{display:none;grid-template-columns:1fr auto;gap:10px;align-items:center;margin-bottom:10px}.toolbar.open{display:grid}.search{height:40px;border:1px solid #cbd5e1;border-radius:6px;padding:0 12px;background:#fff;font-size:14px}.actions{display:flex;gap:8px}.actions button{height:40px;border:1px solid #b6c2d1;background:#fff;border-radius:6px;padding:0 12px;font-size:13px;font-weight:800;color:#26364a;cursor:pointer}.actions .primary,.filters .primary{background:#2563eb;border-color:#2563eb;color:#fff}.filters{display:none;grid-template-columns:repeat(5,minmax(140px,1fr));gap:10px;margin-bottom:12px}.filters.open{display:grid}.filters label{display:grid;gap:4px;font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase}.filters select,.filters input{min-height:36px;border:1px solid #cbd5e1;border-radius:6px;padding:0 10px;background:#fff;color:#172033}.filters select[multiple]{height:92px;padding:6px 8px}.filters button{height:36px;border:1px solid #b6c2d1;background:#fff;border-radius:6px;padding:0 12px;font-size:13px;font-weight:800;color:#26364a;cursor:pointer;align-self:end}
-.subtabs{display:none;gap:8px;align-items:center;margin:0 0 12px;overflow:auto}.subtabs.open{display:flex}.subtab{height:32px;border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:0 10px;font-size:12px;font-weight:800;color:#536274;cursor:pointer;white-space:nowrap}.subtab.active{background:#1f3a5f;color:#fff;border-color:#1f3a5f}.panel{background:#fff;border:1px solid #d9e1ea;border-radius:8px;overflow:hidden}.table-wrap{overflow:auto}.empty{background:#fff;border:1px solid #d9e1ea;border-radius:8px;padding:28px;text-align:center;color:#7a899a}.hint{margin-top:14px;color:#64748b;font-size:12px}.loading{opacity:.55;pointer-events:none}
-table{width:100%;border-collapse:collapse;font-size:13px}th{background:#f8fafc;color:#6b7b8d;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:10px;border-bottom:1px solid #d9e1ea;white-space:nowrap}td{padding:11px 10px;border-bottom:1px solid #eef2f6;vertical-align:top}tbody tr:hover td{background:#f8fbff}.badge{display:inline-flex;align-items:center;min-height:22px;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:800;white-space:nowrap}.ok{background:#dcfce7;color:#166534}.warn{background:#fff7ed;color:#c2410c}.bad{background:#fee2e2;color:#b91c1c}.info{background:#dbeafe;color:#1d4ed8}.muted{background:#eef2f7;color:#536274}.small{font-size:12px;color:#6b7b8d}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.queue-group td{background:#f1f5f9!important;color:#26364a;font-weight:800;border-top:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1}.queue-meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.queue-chip{display:inline-flex;align-items:center;gap:6px;min-height:28px;border-radius:999px;padding:3px 10px;font-size:12px;font-weight:800;border:1px solid #cbd5e1;background:#fff;color:#26364a;white-space:nowrap}.queue-chip.time{background:#dbeafe;border-color:#93c5fd;color:#1d4ed8}.queue-chip.exec{background:#dcfce7;border-color:#86efac;color:#166534}.queue-chip.limit{background:#fef3c7;border-color:#fbbf24;color:#92400e}.queue-plus{background:#1d4ed8;color:#fff;border-radius:999px;padding:2px 7px;font-size:11px}
-@media(max-width:900px){.shell{grid-template-columns:1fr}.side{border-right:0;border-bottom:1px solid #d9e1ea}.side button,.side a{display:inline-block;width:auto}.topbar{align-items:flex-start;flex-direction:column}.auth-mini{width:100%;justify-content:flex-start;flex-wrap:wrap}.period{align-items:flex-start;flex-direction:column}.period-controls,.filters{grid-template-columns:1fr 1fr}.summary-grid{grid-template-columns:repeat(2,1fr)}.toolbar{grid-template-columns:1fr}}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f4f6f8;color:#172033}.topbar{min-height:62px;background:#172033;color:#fff;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 22px;border-bottom:1px solid #0f172a}.brand{display:flex;align-items:baseline;gap:12px}.brand h1{margin:0;font-size:18px;font-weight:800}.brand span{font-size:12px;color:#9fb0c5}.nav{display:flex;align-items:center;gap:8px}.nav a,.nav button{border:0;background:#26364a;color:#dbe7f5;border-radius:6px;padding:8px 11px;text-decoration:none;font-size:13px;cursor:pointer}.nav a:hover,.nav button:hover{background:#334a65;color:#fff}.auth-mini{display:flex;align-items:center;gap:8px;flex:1;justify-content:center;min-width:0}.auth-mini-card{display:flex;align-items:center;gap:7px;min-width:155px;max-width:230px;height:34px;border:1px solid rgba(255,255,255,.16);background:#26364a;border-radius:7px;padding:0 8px;color:#dbe7f5}.auth-mini-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}.auth-mini-card.ok .auth-mini-dot{background:#22c55e}.auth-mini-card.expired .auth-mini-dot{background:#ef4444}.auth-mini-card.missing .auth-mini-dot{background:#94a3b8}.auth-mini-text{min-width:0;flex:1}.auth-mini-name{font-size:11px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.auth-mini-detail{font-size:10px;color:#aebdd0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.auth-mini-link{background:#334a65;color:#fff;border-radius:5px;padding:5px 7px;text-decoration:none;font-size:10px;font-weight:800;white-space:nowrap}.shell{display:grid;grid-template-columns:240px 1fr;min-height:calc(100vh - 62px)}.side{background:#fff;border-right:1px solid #d9e1ea;padding:14px}.side button,.side a{width:100%;display:block;text-align:left;border:0;background:transparent;color:#334155;border-radius:7px;padding:10px 11px;font-size:14px;font-weight:800;text-decoration:none;cursor:pointer}.side button:hover,.side a:hover{background:#f1f5f9}.side button.active{background:#1f3a5f;color:#fff}.side button.child{padding:7px 11px 7px 26px;font-size:12px;color:#536274}.side button.child.active{background:#eaf2ff;color:#17437a}.side .group{margin-top:12px;padding:0 11px 5px;color:#64748b;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}.side .legacy{margin-top:20px;border-top:1px solid #e2e8f0;border-radius:0;color:#64748b;font-size:12px}.content{padding:18px;min-width:0}.period{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.period-title{display:flex;align-items:center;gap:8px;color:#536274;font-size:13px;font-weight:800}.period-pill{height:34px;border:1px solid #9cc5ff;background:#eaf2ff;color:#17437a;border-radius:6px;padding:0 11px;font-size:13px;font-weight:800;cursor:pointer}.collapse-btn{height:34px;border:1px solid #cbd5e1;background:#fff;color:#26364a;border-radius:6px;padding:0 10px;font-size:12px;font-weight:800;cursor:pointer}.period-controls{display:none;grid-template-columns:repeat(3,minmax(160px,1fr));gap:10px;background:#fff;border:1px solid #d9e1ea;border-radius:8px;padding:10px;margin-bottom:14px}.period-controls.open{display:grid}.period-group{display:grid;grid-template-columns:1fr 1fr;gap:6px}.period-group strong,.period-range strong{grid-column:1/-1;color:#64748b;font-size:11px;font-weight:900;text-transform:uppercase}.period-controls button,.period-controls input{height:36px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#26364a;padding:0 10px;font-size:13px;font-weight:700}.period-controls button{cursor:pointer}.period-controls button.active{background:#1f3a5f;color:#fff;border-color:#1f3a5f}.period-controls label{display:grid;gap:4px;font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase}.period-range{display:grid;grid-template-columns:1fr 1fr;gap:8px}.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:12px;margin-bottom:14px}.summary-grid.collapsed{display:none}.metric{border:1px solid #d9e1ea;border-radius:8px;padding:14px;min-height:104px;display:flex;flex-direction:column;justify-content:space-between}.metric .value{font-size:29px;font-weight:850}.metric .label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#334155;margin-top:4px;line-height:1.25}.metric.blue{background:#bfdbfe;border-color:#60a5fa}.metric.green{background:#bbf7d0;border-color:#4ade80}.metric.orange{background:#fed7aa;border-color:#fb923c}.metric.lilac{background:#e9d5ff;border-color:#c084fc}.metric.red{background:#fecaca;border-color:#f87171}.metric.yellow{background:#fef08a;border-color:#facc15}.metric button{align-self:flex-start;margin-top:10px;height:28px;border:1px solid rgba(15,23,42,.14);background:#fff;border-radius:6px;padding:0 10px;font-size:12px;font-weight:800;color:#26364a;cursor:pointer}.toolbar{display:none;grid-template-columns:1fr auto;gap:10px;align-items:center;margin-bottom:10px}.toolbar.open{display:grid}.search{height:40px;border:1px solid #cbd5e1;border-radius:6px;padding:0 12px;background:#fff;font-size:14px}.actions{display:flex;gap:8px}.actions button,.list-tools select{height:40px;border:1px solid #b6c2d1;background:#fff;border-radius:6px;padding:0 12px;font-size:13px;font-weight:800;color:#26364a;cursor:pointer}.filters{display:none;grid-template-columns:repeat(5,minmax(140px,1fr));gap:10px;margin-bottom:12px}.filters.open{display:grid}.filters label{display:grid;gap:4px;font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase}.filters .origin-only,.filters .webhook-only{display:none}.filters select,.filters input{min-height:36px;border:1px solid #cbd5e1;border-radius:6px;padding:0 10px;background:#fff;color:#172033}.filters select[multiple]{height:92px;padding:6px 8px}.filters button{height:36px;border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:6px;padding:0 12px;font-size:13px;font-weight:800;cursor:pointer;align-self:end}.view-head{display:none;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}.view-head.open{display:flex}.subtabs{display:flex;gap:8px;align-items:center;overflow:auto}.subtab{height:32px;border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:0 10px;font-size:12px;font-weight:800;color:#536274;cursor:pointer;white-space:nowrap}.subtab.active{background:#1f3a5f;color:#fff;border-color:#1f3a5f}.list-tools{display:flex;align-items:center;gap:8px;color:#64748b;font-size:12px;font-weight:800}.panel{display:none;background:#fff;border:1px solid #d9e1ea;border-radius:8px;overflow:hidden}.panel.open{display:block}.table-wrap{overflow:auto}.empty{padding:28px;text-align:center;color:#7a899a}.load-more{padding:12px;text-align:center;border-top:1px solid #e2e8f0}.load-more button{height:36px;border:1px solid #94a3b8;background:#fff;border-radius:6px;padding:0 14px;font-weight:800;color:#334155;cursor:pointer}table{width:100%;border-collapse:collapse;font-size:13px}th{background:#f8fafc;color:#6b7b8d;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:10px;border-bottom:1px solid #d9e1ea;white-space:nowrap}td{padding:11px 10px;border-bottom:1px solid #eef2f6;vertical-align:top}tbody tr:hover td{background:#f8fbff}.badge{display:inline-flex;align-items:center;min-height:22px;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:800;white-space:nowrap}.ok{background:#dcfce7;color:#166534}.warn{background:#fff7ed;color:#c2410c}.bad{background:#fee2e2;color:#b91c1c}.info{background:#dbeafe;color:#1d4ed8}.muted{background:#eef2f7;color:#536274}.small{font-size:12px;color:#6b7b8d}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.queue-group td{background:#f1f5f9!important;color:#26364a;font-weight:800;border-top:1px solid #cbd5e1}.queue-meta{display:flex;gap:8px;flex-wrap:wrap}.queue-chip{display:inline-flex;align-items:center;gap:6px;min-height:28px;border-radius:999px;padding:3px 10px;font-size:12px;font-weight:800;border:1px solid #cbd5e1;background:#fff;white-space:nowrap}.queue-chip.time{background:#dbeafe;border-color:#93c5fd;color:#1d4ed8}.queue-chip.exec{background:#dcfce7;border-color:#86efac;color:#166534}.queue-chip.limit{background:#fef3c7;border-color:#fbbf24;color:#92400e}.queue-plus{background:#1d4ed8;color:#fff;border-radius:999px;padding:2px 7px;font-size:11px}.flow{display:grid;gap:5px}.flow-line{display:flex;align-items:center;gap:8px;white-space:nowrap}.flow-dot{width:18px;height:18px;border-radius:50%;display:inline-block;box-shadow:0 0 0 2px rgba(15,23,42,.06)}.flow-dot.in{background:#fbbf24}.flow-dot.out{background:#22c55e}.reason{display:flex;gap:4px;flex-wrap:wrap}.erp-link,.tracking-link{color:#172033;text-decoration:none}.erp-link:hover,.tracking-link:hover{text-decoration:underline}.danger-text{color:#dc2626;font-weight:800}.reviewbar{padding:12px;border-bottom:1px solid #e2e8f0;background:#f8fafc}.reviewbar button{height:34px;border:0;border-radius:6px;background:#1f3a5f;color:#fff;padding:0 12px;font-size:13px;font-weight:800;cursor:pointer}.reviewbar button:disabled{background:#cbd5e1;color:#64748b}.selectcol{width:38px;text-align:center}.loader{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;background:rgba(244,246,248,.78);backdrop-filter:blur(1px)}.loader.open{display:flex}.loader-box{display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:14px 18px;box-shadow:0 12px 35px rgba(15,23,42,.16);font-size:13px;font-weight:800}.spinner{width:22px;height:22px;border:3px solid #bfdbfe;border-top-color:#2563eb;border-radius:50%;animation:spin .75s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.46);display:none;align-items:center;justify-content:center;padding:18px;z-index:40}.modal-backdrop.open{display:flex}.modal{width:min(680px,100%);max-height:88vh;overflow:auto;background:#fff;border-radius:8px;box-shadow:0 20px 70px rgba(15,23,42,.35);border:1px solid #d9e1ea}.modal-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #d9e1ea}.modal-head h2{font-size:16px;margin:0}.modal-head button{border:1px solid #cbd5e1;background:#fff;border-radius:6px;height:32px;width:36px;font-size:20px;cursor:pointer}.modal-body{padding:14px 16px;display:grid;gap:10px}.check-row{display:flex;align-items:center;gap:10px;border:1px solid #e2e8f0;border-radius:7px;padding:10px;background:#fbfdff}.check-row input{width:18px;height:18px}.modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:14px 16px;border-top:1px solid #d9e1ea}.modal-foot button{height:38px;border:1px solid #b6c2d1;background:#fff;border-radius:6px;padding:0 12px;font-size:13px;font-weight:800;cursor:pointer}.modal-foot .primary{background:#2563eb;border-color:#2563eb;color:#fff}.modal-foot button:disabled{opacity:.45}.diff-row{display:grid;grid-template-columns:160px 1fr 1fr;gap:10px;padding:9px;border-bottom:1px solid #eef2f6}.diff-row.divergent{background:#fff7ed;border-left:3px solid #f97316}.toast{position:fixed;right:18px;bottom:18px;z-index:60;display:none;max-width:420px;background:#172033;color:#fff;border-radius:7px;padding:12px 14px;font-size:13px;box-shadow:0 12px 32px rgba(15,23,42,.25)}.toast.open{display:block}
+@media(max-width:900px){.shell{grid-template-columns:1fr}.side{border-right:0;border-bottom:1px solid #d9e1ea}.side button,.side a{display:inline-block;width:auto}.topbar{align-items:flex-start;flex-direction:column}.auth-mini{width:100%;justify-content:flex-start;flex-wrap:wrap}.period{align-items:flex-start;flex-direction:column}.period-controls,.filters{grid-template-columns:1fr 1fr}.summary-grid{grid-template-columns:repeat(2,1fr)}.view-head{align-items:flex-start;flex-direction:column}.diff-row{grid-template-columns:1fr}}
+.modal-note{margin:0;padding:10px;border-radius:6px;background:#eff6ff;color:#1e3a5f;font-size:12px;line-height:1.45}
 </style>
 </head>
 <body>
-<header class="topbar">
-  <div class="brand"><h1>Gestão de Pedidos Rejuderme</h1><span>Integração Tiny</span></div>
-  <div class="auth-mini" id="authMini"></div>
-  <nav class="nav">
-    <button id="refreshBtn">Atualizar</button>
-    <button id="resetBtn">Reiniciar página</button>
-    <a href="/logout">Sair</a>
-  </nav>
-</header>
+<div class="loader open" id="loader"><div class="loader-box"><span class="spinner"></span><span id="loaderText">Carregando painel...</span></div></div>
+<header class="topbar"><div class="brand"><h1>Gestão de Pedidos Rejuderme</h1><span>Integração Tiny</span></div><div class="auth-mini" id="authMini"></div><nav class="nav"><button id="refreshBtn">Atualizar</button><button id="resetBtn">Reiniciar página</button><a href="/logout">Sair</a></nav></header>
 <div class="shell">
   <aside class="side">
-    <button class="menu active" data-page="home">Início</button>
-    <div class="group">Listagens</div>
-    <button class="menu" data-page="queue">Fila de Execuções</button>
-    <button class="menu" data-page="origin">Pedidos na origem</button>
-    <button class="menu" data-page="synced">Pedidos sincronizados</button>
-    <button class="menu" data-page="cancelled">Verificar cancelamentos</button>
-    <a href="/orders-panel">Painel completo antigo</a>
+    <button class="menu active" data-page="home">Início</button><div class="group">Listagens</div>
+    <button class="menu" data-page="queue">Fila de Execuções</button><button class="menu child" data-page="queue" data-subtab="webhooks">Webhooks</button><button class="menu child" data-page="queue" data-subtab="executed">Sucesso</button><button class="menu child" data-page="queue" data-subtab="future">Futuros</button><button class="menu child" data-page="queue" data-subtab="error">Com erro</button>
+    <button class="menu" data-page="origin">Pedidos na origem</button><button class="menu child" data-page="origin" data-subtab="ready">Prontos para exportação</button><button class="menu child" data-page="origin" data-subtab="needs_adjustment">Precisam de ajuste</button><button class="menu child" data-page="origin" data-subtab="do_not_export">Não exportar</button>
+    <button class="menu" data-page="synced">Pedidos sincronizados</button><button class="menu" data-page="cancelled">Verificar cancelados</button><button class="menu child" data-page="cancelled" data-subtab="pending">Analisar</button><button class="menu child" data-page="cancelled" data-subtab="reviewed">Conferidos</button>
+    <a class="legacy" href="/orders-panel">Painel anterior</a>
   </aside>
   <main class="content">
-    <section class="period">
-      <div class="period-title"><span>Período analisado</span><button class="period-pill" id="periodToggle">Últimos 30 dias</button></div>
-      <button class="collapse-btn" id="collapseCards">Recolher cards</button>
-    </section>
-    <section class="period-controls" id="periodControls">
-      <div class="period-group"><strong>Dia</strong><button data-period="yesterday">Ontem</button><button data-period="today">Hoje</button></div>
-      <div class="period-group"><strong>Últimos</strong><button data-period="last_7">7 dias</button><button data-period="last_30" class="active">30 dias</button></div>
-      <div class="period-group"><strong>Mês</strong><button data-period="this_month">Este mês</button><button data-period="previous_6_months">6 meses anteriores</button></div>
-      <div class="period-range">
-        <strong>Período</strong>
-        <label>Início<input id="customStart" type="date"></label>
-        <label>Fim<input id="customEnd" type="date"></label>
-      </div>
-      <div class="period-note" id="periodNote">Informe início e fim para carregar o período escolhido.</div>
-    </section>
+    <section class="period"><div class="period-title"><span>Período analisado</span><button class="period-pill" id="periodToggle">Hoje</button></div><button class="collapse-btn" id="collapseCards">Recolher cards</button></section>
+    <section class="period-controls" id="periodControls"><div class="period-group"><strong>Dia</strong><button data-period="yesterday">Ontem</button><button data-period="today" class="active">Hoje</button></div><div class="period-group"><strong>Últimos</strong><button data-period="last_7">7 dias</button><button data-period="last_30">30 dias</button></div><div class="period-group"><strong>Mês</strong><button data-period="this_month">Este mês</button><button data-period="previous_month">Mês anterior</button></div><div class="period-range"><strong>Período</strong><label>Início<input id="customStart" type="date"></label><label>Fim<input id="customEnd" type="date"></label></div></section>
     <section class="summary-grid" id="summary"></section>
-    <section class="toolbar" id="toolbar">
-      <input id="search" class="search" placeholder="Pesquisar por pedido, cliente, CPF/CNPJ, ID, ecommerce ou erro">
-      <div class="actions">
-        <button id="clearBtn">Limpar</button>
-        <button id="filtersBtn">Filtrar</button>
-      </div>
-    </section>
-    <section class="filters" id="filters">
-      <label>Conta<select id="filterAccount" multiple><option value="A">Rejuderme</option><option value="B">V.365</option></select></label>
-      <label>Tipo<select id="filterType" multiple></select></label>
-      <label>Status/Ação<select id="filterStatus" multiple></select></label>
-      <label>Data<input id="filterDate" type="date"></label>
-      <label>Hora<input id="filterHour" type="time"></label>
-      <button class="primary" id="applyFilters">Aplicar filtros</button>
-    </section>
-    <section class="subtabs" id="subtabs"></section>
-    <section class="panel"><div class="table-wrap" id="tableWrap"><div class="empty">A dashboard inicial carrega apenas os resumos. Escolha uma página no menu para carregar a listagem.</div></div></section>
-    <div class="hint" id="hint">Os dados das listagens ficam salvos nesta página até você sair, atualizar ou clicar em Reiniciar página.</div>
+    <section class="toolbar" id="toolbar"><input id="search" class="search" placeholder="Pesquisar por pedido, cliente, CPF/CNPJ, ID, ecommerce, rastreio ou erro"><div class="actions"><button id="clearBtn">Limpar</button><button id="filtersBtn">Filtrar</button></div></section>
+    <section class="filters" id="filters"><label>Conta<select id="filterAccount" multiple><option value="A">Rejuderme</option><option value="B">V.365</option></select></label><label>Tipo<select id="filterType" multiple></select></label><label>Situação<select id="filterStatus" multiple></select></label><label class="webhook-only">Ação<select id="filterAction" multiple></select></label><label>Data<input id="filterDate" type="date"></label><label>Hora<input id="filterHour" type="time"></label><label class="origin-only">Recebido<input id="filterReceivedDate" type="date"></label><label class="origin-only">Previsão envio<input id="filterPlannedDate" type="date"></label><label class="origin-only">Forma envio<select id="filterShipping" multiple></select></label><label class="origin-only">Motivos<select id="filterReason" multiple></select></label><button id="applyFilters">Aplicar filtros</button></section>
+    <section class="view-head" id="viewHead"><div class="subtabs" id="subtabs"></div><div class="list-tools" id="listTools"></div></section>
+    <section class="panel" id="panel"><div class="table-wrap" id="tableWrap"></div></section>
   </main>
 </div>
-<script>
-const state={page:'home',subtab:'',period:'last_30',start:'',end:'',summary:null,auth:{tokens:[],health:{}},cache:{},query:'',filters:{accounts:[],types:[],statuses:[],date:'',hour:''},cardsCollapsed:false};
-const $=id=>document.getElementById(id);
-const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-const fmt=v=>v===null||v===undefined||v===''?'-':String(v);
-const date=v=>v?new Date(v).toLocaleString('pt-BR'):'-';
-const textOf=o=>JSON.stringify(o||{}).toLowerCase();
-function badge(label,type='muted'){return `<span class="badge ${type}">${esc(label)}</span>`}
-function statusText(s){return s==='concluido'?'Concluído':(s==='aguardando'?'Aguardando':(s==='erro'?'Erro':fmt(s)))}
-function taskBadge(s){return badge(statusText(s),s==='concluido'?'ok':(s==='erro'?'bad':'info'))}
-function table(headers,rows){return rows.length?`<table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`:'<div class="empty">Nenhum registro encontrado.</div>'}
-function card(label,value,tone,actionLabel,page){
-  const action=actionLabel?`<button onclick="openPage('${page||'queue'}')">${esc(actionLabel)}</button>`:'';
-  return `<div class="metric ${tone}"><div><div class="value">${esc(value)}</div><div class="label">${esc(label)}</div></div>${action}</div>`;
-}
-async function loadSummary(){
-  const params=new URLSearchParams({period:state.period});
-  if(state.period==='custom'&&state.start&&state.end){params.set('start',state.start);params.set('end',state.end)}
-  const res=await fetch('/admin/orders-panel/summary?'+params.toString());
-  if(res.status===401){location.href='/login?next=/dashboard';return}
-  if(!res.ok)throw new Error('Falha ao carregar resumo: '+res.status);
-  state.summary=await res.json();
-  $('periodToggle').textContent=state.summary.period.label;
-  renderSummary();
-}
-function renderSummary(){
-  const c=state.summary?.cards||{};
-  $('summary').classList.toggle('collapsed',state.cardsCollapsed);
-  $('summary').innerHTML=[
-    card('Exportações concluídas',c.export_completed,'green'),
-    card('Agendados para exportar',c.scheduled_export,'blue'),
-    card('Precisam de ajuste',c.needs_adjustment,'orange','Atualizar','origin'),
-    card('Não exportar',c.do_not_export,'gray'),
-    card('Sincronizados',c.synced,'green'),
-    card('Com erro de sincronismo',c.sync_errors,'red','Retentar','queue'),
-    card('Divergentes',c.divergent,'purple','Sincronizar','synced'),
-    card('Cancelados para analisar',c.cancelled_pending,'teal','Abrir','cancelled')
-  ].join('');
-  $('collapseCards').textContent=state.cardsCollapsed?'Mostrar cards':'Recolher cards';
-}
-async function loadAuth(){
-  try{
-    const [tokensRes,healthRes]=await Promise.all([fetch('/admin/tokens').catch(()=>null),fetch('/admin/tokens/health').catch(()=>null)]);
-    state.auth.tokens=tokensRes&&tokensRes.ok?(await tokensRes.json()).tokens||[]:[];
-    state.auth.health=healthRes&&healthRes.ok?(await healthRes.json()):{};
-    renderAuth();
-  }catch(e){}
-}
-function renderAuth(){
-  const tokens={A:null,B:null};(state.auth.tokens||[]).forEach(t=>tokens[t.account]=t);
-  const labels={A:'Rejuderme',B:'V.365'},paths={A:'/auth/a/start',B:'/auth/c/start'};
-  $('authMini').innerHTML=['A','B'].map(acc=>{
-    const t=tokens[acc],h=state.auth.health?.[acc];let cls='missing',status='Sem conexão';
-    if(t){const expires=t.expires_at?new Date(t.expires_at):null;const valid=expires&&expires>new Date();if(!valid){cls='expired';status='Expirado'}else if(h&&h.ok===false){cls='expired';status=h.status_code===401?'Token inválido':'Falha'}else{cls='ok';status='Conectado'}}
-    return `<div class="auth-mini-card ${cls}"><span class="auth-mini-dot"></span><div class="auth-mini-text"><div class="auth-mini-name">Tiny ${esc(labels[acc])}</div><div class="auth-mini-detail">${esc(status)}</div></div><a class="auth-mini-link" href="${paths[acc]}" target="_blank">Reconectar</a></div>`;
-  }).join('');
-}
-function matches(item){
-  if(state.query&&!textOf(item).includes(state.query.toLowerCase()))return false;
-  if(state.filters.accounts.length){
-    const account=item.source||item.account||item.payload?.source;
-    if(!state.filters.accounts.includes(account))return false;
-  }
-  if(state.filters.types.length&&!state.filters.types.includes(String(item.job_type||item.topic||'')))return false;
-  if(state.filters.statuses.length&&!state.filters.statuses.includes(String(statusKey(item))))return false;
-  if(state.filters.date){
-    const d=new Date(item.scheduled_at||item.updated_at||item.created_at||0);
-    if(d.toISOString().slice(0,10)!==state.filters.date)return false;
-  }
-  if(state.filters.hour){
-    const d=new Date(item.scheduled_at||item.updated_at||item.created_at||0);
-    if(d.toTimeString().slice(0,5)!==state.filters.hour)return false;
-  }
-  return true;
-}
-function queueStatus(item){
-  if(item.status==='done')return 'concluido';
-  if(['failed','dead','waiting_sku','skipped_not_mapped'].includes(item.status))return 'erro';
-  return 'aguardando';
-}
-function statusKey(item){
-  if(item.job_type||item.dedupe_key)return item.task_status||queueStatus(item);
-  return item.action_result||item.status||'';
-}
-function normalizeErrorJob(x){
-  const payload=typeof x.payload==='string'?safeJson(x.payload):x.payload||{};
-  return {id:x.id,job_type:x.job_type,dedupe_key:x.dedupe_key,status:x.status,payload,attempts:x.attempts,last_error:x.last_error,created_at:x.created_at,updated_at:x.updated_at,task_status:'erro',task_label:x.job_type,venda_a_id:payload.venda_a_id||payload.venda_id,venda_c_id:payload.venda_c_id};
-}
-function safeJson(s){try{return JSON.parse(s)}catch(e){return {}}}
-async function loadQueue(force=false){
-  if(state.cache.queue&&!force){return state.cache.queue}
-  document.body.classList.add('loading');
-  try{
-    const hasAppliedFilters=state.filters.types.length||state.filters.statuses.length||state.filters.accounts.length||state.filters.date||state.filters.hour;
-    const params=new URLSearchParams({limit:hasAppliedFilters?'500':'120',period:state.period});
-    if(state.period==='custom'&&state.start&&state.end){params.set('start',state.start);params.set('end',state.end)}
-    if(state.filters.types.length)params.set('types',state.filters.types.join(','));
-    if(state.filters.statuses.length)params.set('statuses',state.filters.statuses.join(','));
-    if(state.filters.accounts.length)params.set('accounts',state.filters.accounts.join(','));
-    const dataRes=await fetch('/admin/orders-panel/queue-data?'+params.toString());
-    if(dataRes.status===401){location.href='/login?next=/dashboard';return}
-    if(!dataRes.ok)throw new Error('Falha ao carregar fila: '+dataRes.status);
-    const data=await dataRes.json();
-    state.cache.queue={items:data.queue?.items||[],groups:data.queue?.groups||[],events:data.events||[]};
-    return state.cache.queue;
-  }finally{document.body.classList.remove('loading')}
-}
-function periodDays(){return state.period==='last_7'?7:state.period==='today'||state.period==='yesterday'?1:30}
-function queueGroupRow(group){
-  const start=group.window_start?new Date(group.window_start).toLocaleString('pt-BR'):'Sem horário';
-  return `<tr class="queue-group"><td colspan="11"><div class="queue-meta"><span class="queue-chip time">${esc(start)} <span class="queue-plus">+10 min</span></span><span class="queue-chip exec">Execuções: A ${esc(group.planned_a||0)} / ${esc(group.success_a||0)} · C ${esc(group.planned_c||0)} / ${esc(group.success_c||0)} <span class="small">previstas / sucesso</span></span><span class="queue-chip limit">Limites restantes API: A ${esc(group.remaining_a||0)} | C ${esc(group.remaining_c||0)}</span></div></td></tr>`;
-}
-function renderQueue(){
-  const q=state.cache.queue||{items:[],groups:[],events:[]};
-  $('toolbar').classList.add('open');$('subtabs').classList.add('open');
-  const tabs=[['webhooks','Webhooks'],['executed','Executados'],['future','Futuros'],['error','Com erro']];
-  if(!state.subtab)state.subtab='webhooks';
-  const counts=queueCounts(q);
-  $('subtabs').innerHTML=tabs.map(([key,label])=>`<button class="subtab ${state.subtab===key?'active':''}" data-subtab="${key}">${label} (${counts[key]||0})</button>`).join('');
-  document.querySelectorAll('.subtab').forEach(b=>b.onclick=()=>{state.subtab=b.dataset.subtab;renderQueue()});
-  populateFilterOptions(q);
-  if(state.subtab==='webhooks')return renderWebhooks(q.events);
-  let list=q.items.filter(item=>{
-    const status=queueStatus(item);
-    if(state.subtab==='executed')return status==='concluido';
-    if(state.subtab==='future')return !!item.is_future;
-    if(state.subtab==='error')return status==='erro';
-    return true;
-  }).filter(matches).sort((a,b)=>new Date(b.scheduled_at||b.updated_at||b.created_at||0)-new Date(a.scheduled_at||a.updated_at||a.created_at||0));
-  const groups=Object.fromEntries((q.groups||[]).map(g=>[g.window_key,g]));let last='',rows=[];
-  list.slice(0,120).forEach(x=>{
-    if(state.subtab!=='error'&&x.window_key&&x.window_key!==last){rows.push(queueGroupRow(groups[x.window_key]||{window_key:x.window_key}));last=x.window_key}
-    rows.push(`<tr><td>${esc(x.venda_a_id||'-')}<div class="small mono">ID A</div></td><td>${esc(x.venda_c_id||'-')}<div class="small mono">ID C</div></td><td>${date(x.scheduled_at||x.updated_at||x.created_at)}</td><td>${esc(x.cliente||'-')}<div class="small">${esc(x.cpf_cnpj||'-')}</div></td><td>${esc(x.ecommerce_nome||'-')}<div class="small mono">${esc(x.numero_ecommerce||'-')}</div></td><td>${esc(x.task_label||x.job_type||'-')}</td><td>${taskBadge(queueStatus(x))}</td><td>${esc(x.attempts||0)}</td><td><div class="small">${esc(x.last_error||'')}</div></td></tr>`);
-  });
-  $('tableWrap').innerHTML=table(['Origem','Destino','Previsto/Atualizado','Cliente','Ecommerce','Tarefa','Status','Tentativas','Erro'],rows);
-}
-function renderWebhooks(events){
-  const list=events.filter(matches).sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)).slice(0,10);
-  $('tableWrap').innerHTML=table(['Recebido','Conta','Tipo','Pedido','Situação','Nota fiscal','Ação'],list.map(x=>`<tr><td>${date(x.created_at)}</td><td>${badge(x.source==='A'?'Rejuderme':'V.365',x.source==='A'?'info':'muted')}</td><td>${esc(x.topic||'-')}</td><td class="mono">${esc(x.venda_id||'-')}</td><td>${esc(x.codigo_situacao||'-')}</td><td class="mono">${esc(x.id_nota_fiscal||'-')}</td><td>${badge(x.action_result||'-','muted')}</td></tr>`));
-}
-async function refreshWebhooksOnly(){
-  if(state.page!=='queue'||state.subtab!=='webhooks'||!state.cache.queue)return;
-  try{
-    const res=await fetch('/admin/events?limit=10');
-    if(!res.ok)return;
-    const data=await res.json();
-    state.cache.queue.events=data.events||[];
-    renderQueue();
-  }catch(e){}
-}
-function queueCounts(q){
-  return {webhooks:(q.events||[]).filter(matches).length,executed:(q.items||[]).filter(x=>queueStatus(x)==='concluido'&&matches(x)).length,future:(q.items||[]).filter(x=>x.is_future&&matches(x)).length,error:(q.items||[]).filter(x=>queueStatus(x)==='erro'&&matches(x)).length};
-}
-function populateFilterOptions(q){
-  const all=state.subtab==='webhooks'?(q.events||[]):(q.items||[]);
-  const types=[...new Set(all.map(x=>x.job_type||x.topic).filter(Boolean))].sort();
-  const statuses=[...new Set(all.map(x=>statusKey(x)).filter(Boolean))].sort();
-  $('filterType').innerHTML=types.map(t=>`<option value="${esc(t)}" ${state.filters.types.includes(t)?'selected':''}>${esc(t)}</option>`).join('');
-  $('filterStatus').innerHTML=statuses.map(s=>`<option value="${esc(s)}" ${state.filters.statuses.includes(s)?'selected':''}>${esc(statusText(s))}</option>`).join('');
-  [...$('filterAccount').options].forEach(opt=>opt.selected=state.filters.accounts.includes(opt.value));
-}
-async function openPage(page,force=false){
-  state.page=page;state.subtab=page==='queue'?(state.subtab||'webhooks'):'';
-  document.querySelectorAll('.menu').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
-  $('toolbar').classList.toggle('open',page!=='home');$('subtabs').classList.toggle('open',page==='queue');
-  if(page==='home'){$('tableWrap').innerHTML='<div class="empty">Escolha uma página no menu para carregar a listagem.</div>';return}
-  if(page==='queue'){await loadQueue(force);renderQueue();return}
-  $('tableWrap').innerHTML='<div class="empty">Esta página será migrada para carregamento independente na próxima etapa. Por enquanto, use o Painel completo antigo no menu.</div>';
-}
-function selectedValues(id){return [...$(id).selectedOptions].map(opt=>opt.value).filter(Boolean)}
-function applyFilters(){
-  state.filters.accounts=selectedValues('filterAccount');
-  state.filters.types=selectedValues('filterType');
-  state.filters.statuses=selectedValues('filterStatus');
-  state.filters.date=$('filterDate').value;
-  state.filters.hour=$('filterHour').value;
-  state.cache.queue=null;
-  if(state.page==='queue')openPage('queue',true);
-}
-function clearFilters(){state.query='';state.filters={accounts:[],types:[],statuses:[],date:'',hour:''};$('search').value='';['filterAccount','filterType','filterStatus'].forEach(id=>[...$(id).options].forEach(opt=>opt.selected=false));['filterDate','filterHour'].forEach(id=>$(id).value='');state.cache.queue=null;if(state.page==='queue')openPage('queue',true)}
-async function refreshCurrent(){await loadSummary();loadAuth();if(state.page==='queue')await openPage('queue',true)}
-$('periodToggle').onclick=()=>$('periodControls').classList.toggle('open');
-$('collapseCards').onclick=()=>{state.cardsCollapsed=!state.cardsCollapsed;renderSummary()};
-$('refreshBtn').onclick=refreshCurrent;
-$('resetBtn').onclick=()=>{state.cache={};clearFilters();openPage('home');refreshCurrent()};
-$('filtersBtn').onclick=()=>$('filters').classList.toggle('open');
-$('clearBtn').onclick=clearFilters;
-$('search').oninput=e=>{state.query=e.target.value;if(state.page==='queue')renderQueue()};
-$('applyFilters').onclick=applyFilters;
-document.querySelectorAll('.menu').forEach(b=>b.onclick=()=>openPage(b.dataset.page));
-document.querySelectorAll('[data-period]').forEach(btn=>{btn.onclick=()=>{document.querySelectorAll('[data-period]').forEach(b=>b.classList.remove('active'));btn.classList.add('active');state.period=btn.dataset.period;$('periodNote').classList.remove('open');state.cache={};if(state.period!=='custom')refreshCurrent()}});
-function maybeApplyCustomPeriod(){
-  $('periodNote').classList.remove('open');
-  if(!state.start||!state.end)return;
-  document.querySelectorAll('[data-period]').forEach(b=>b.classList.remove('active'));
-  state.period='custom';
-  state.cache={};
-  refreshCurrent();
-}
-$('customStart').onchange=e=>{state.start=e.target.value;maybeApplyCustomPeriod()};
-$('customEnd').onchange=e=>{state.end=e.target.value;maybeApplyCustomPeriod()};
-loadSummary();loadAuth();
-setInterval(refreshWebhooksOnly,20000);
-</script>
+<div class="modal-backdrop" id="modal"><div class="modal"><div class="modal-head"><h2 id="modalTitle"></h2><button id="modalClose" aria-label="Fechar">×</button></div><div class="modal-body" id="modalBody"></div><div class="modal-foot" id="modalFoot"></div></div></div>
+<div class="toast" id="toast"></div>
+<script src="/admin/dashboard.js"></script>
 </body>
 </html>

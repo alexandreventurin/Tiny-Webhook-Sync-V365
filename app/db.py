@@ -4,14 +4,54 @@ import json
 import logging
 import os
 from typing import Optional
-from datetime import datetime
+from datetime import date, datetime
 
 from app.settings import DATABASE_URL
+from app.utils import is_approved_create_request
 
 pool: Optional[asyncpg.Pool] = None
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 5
+
+ALLOWED_JOB_TYPES = {
+    'noop',
+    'create_order_c',
+    'sync_status',
+    'fetch_label',
+    'fetch_nf_link',
+    'sync_nf_link',
+    'fetch_order_a',
+    'add_tag_c',
+    'add_tag_a',
+    'sync_tracking_c_to_a',
+    'update_numero_compra',
+    'approve_order_a',
+    'sync_order_fields',
+    'sweep_origin_exports',
+    'reconcile_recent_statuses',
+}
+
+
+async def _remove_legacy_job_type_constraint() -> None:
+    """Remove the old database allowlist; job types are validated in insert_job."""
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                WHERE n.nspname = 'public'
+                  AND t.relname = 'jobs'
+                  AND c.conname = 'jobs_job_type_check'
+            )
+        """)
+        if exists:
+            await conn.execute(
+                "ALTER TABLE public.jobs DROP CONSTRAINT jobs_job_type_check"
+            )
+            logger.info("Removed legacy jobs_job_type_check constraint")
 
 
 async def init_db():
@@ -30,6 +70,8 @@ async def init_db():
             timeout=int(os.getenv("DB_CONNECT_TIMEOUT_SECONDS", "20")),
             statement_cache_size=0
         )
+
+        await _remove_legacy_job_type_constraint()
 
         if os.getenv("RUN_DB_SCHEMA_ON_STARTUP", "0").lower() not in ("1", "true", "yes"):
             logger.info("Database connected; schema initialization skipped on startup")
@@ -159,6 +201,46 @@ async def init_db():
                     updated_at TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS public.contacts_map (
+                    id BIGSERIAL PRIMARY KEY,
+                    cpf_cnpj_normalized TEXT NOT NULL UNIQUE,
+                    contato_a_id BIGINT UNIQUE,
+                    contato_c_id BIGINT NOT NULL UNIQUE,
+                    source_fingerprint TEXT,
+                    source_order_a_id BIGINT,
+                    source_order_date DATE,
+                    last_confirmed_at TIMESTAMPTZ,
+                    last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    CONSTRAINT contacts_map_cpf_digits_check
+                        CHECK (cpf_cnpj_normalized ~ '^[0-9]{8,20}$'),
+                    CONSTRAINT contacts_map_fingerprint_check
+                        CHECK (source_fingerprint IS NULL OR source_fingerprint ~ '^[0-9a-f]{64}$')
+                )
+            """)
+            await conn.execute("ALTER TABLE public.contacts_map ENABLE ROW LEVEL SECURITY")
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_events_created_at_id
+                    ON public.events (created_at DESC, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_jobs_status_updated_at
+                    ON public.jobs (status, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_jobs_type_status_updated_at
+                    ON public.jobs (job_type, status, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_jobs_event_id
+                    ON public.jobs (event_id);
+                CREATE INDEX IF NOT EXISTS idx_jobs_payload_venda_id
+                    ON public.jobs ((payload->>'venda_id'), updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_jobs_payload_venda_a_id
+                    ON public.jobs ((payload->>'venda_a_id'), updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_jobs_payload_venda_c_id
+                    ON public.jobs ((payload->>'venda_c_id'), updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_orders_map_created_at
+                    ON public.orders_map (created_at DESC);
+            """)
             
             try:
                 await conn.execute("ALTER TABLE public.orders_map ADD COLUMN IF NOT EXISTS last_sync_status TEXT")
@@ -233,30 +315,21 @@ async def init_db():
                 )
             """)
             
-            try:
-                await conn.execute("ALTER TABLE public.jobs DROP CONSTRAINT IF EXISTS jobs_job_type_check")
-                await conn.execute("""
-                    ALTER TABLE public.jobs ADD CONSTRAINT jobs_job_type_check
-                    CHECK (job_type = ANY (ARRAY['noop','create_order_c','sync_status','fetch_label','fetch_nf_link','sync_nf_link','fetch_order_a','add_tag_c','add_tag_a','sync_tracking_c_to_a','update_numero_compra','approve_order_a','sync_order_fields']))
-                """)
-            except Exception:
-                pass
-
             await conn.execute("""
                 INSERT INTO public.feature_flags (key, enabled, functional, label, description) VALUES
                     ('replicate_orders', false, true, 'Replicar Pedidos (Webhook)', 'Cria pedidos em C quando A é aprovado via webhook'),
-                    ('sync_status_enviado', false, true, 'Sync Status: Enviado', 'Espelha status enviado de A para C'),
-                    ('sync_status_entregue', false, true, 'Sync Status: Entregue', 'Espelha status entregue de A para C'),
-                    ('sync_status_cancelado', false, true, 'Sync Status: Cancelado', 'Espelha status cancelado entre A e C'),
-                    ('sync_status_faturado', false, true, 'Sync Status: Faturado', 'Espelha status faturado de C para A'),
-                    ('sync_nf_link', false, true, 'Enviar NF', 'Envia dados da NF de C para observações de A'),
-                    ('sync_tracking_pronto_envio', true, true, 'Sync Rastreio C→A (Pronto Envio)', 'Quando C entra em pronto_envio, copia código/URL de rastreio para A e avança status')
+                    ('sync_status_enviado', false, true, 'Sync Status: Enviado', 'Quando C fica enviado, atualiza situação, NF e rastreio em A'),
+                    ('sync_status_entregue', false, true, 'Sync Status: Entregue', 'Espelha status entregue de C para A'),
+                    ('sync_status_cancelado', false, true, 'Sync Status: Cancelado', 'Espelha cancelado de C para A; cancelamento manual em A vai apenas para análise'),
+                    ('sync_status_faturado', false, false, 'Sync Status: Faturado (inativo)', 'Fluxo antigo, não utilizado'),
+                    ('sync_nf_link', false, false, 'Enviar NF (fluxo antigo)', 'Substituído pela atualização única quando C fica enviado'),
+                    ('sync_tracking_pronto_envio', false, false, 'Sync Rastreio separado (fluxo antigo)', 'Substituído pela atualização única quando C fica enviado')
                 ON CONFLICT (key) DO UPDATE SET functional = EXCLUDED.functional, label = EXCLUDED.label, description = EXCLUDED.description
             """)
 
             await conn.execute("""
                 INSERT INTO public.feature_flags (key, enabled, functional, label, description)
-                VALUES ('auto_approve_open_orders', true, true, 'Aprovar pedidos em aberto', 'Aprova pedidos A em aberto no mesmo horario apos 1 dia util')
+                VALUES ('auto_approve_open_orders', true, true, 'Aprovar pedidos em aberto', 'Aprova pedidos A em aberto as 01h apos 2 dias uteis, considerando sabado util')
                 ON CONFLICT (key) DO UPDATE SET functional = EXCLUDED.functional, label = EXCLUDED.label, description = EXCLUDED.description
             """)
 
@@ -297,6 +370,87 @@ async def get_pool() -> asyncpg.Pool:
     return pool
 
 
+async def get_contact_mapping(cpf_cnpj_normalized: str, contato_a_id: int | None = None) -> dict | None:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        row = None
+        if contato_a_id is not None:
+            row = await conn.fetchrow("""
+                SELECT *
+                FROM public.contacts_map
+                WHERE contato_a_id = $1
+                LIMIT 1
+            """, contato_a_id)
+        if row is None:
+            row = await conn.fetchrow("""
+                SELECT *
+                FROM public.contacts_map
+                WHERE cpf_cnpj_normalized = $1
+                LIMIT 1
+            """, cpf_cnpj_normalized)
+        return dict(row) if row else None
+
+
+async def save_contact_mapping(
+    *,
+    mapping_id: int | None,
+    cpf_cnpj_normalized: str,
+    contato_a_id: int | None,
+    contato_c_id: int,
+    source_fingerprint: str,
+    source_order_a_id: int | None,
+    source_order_date: date | None,
+    confirmed: bool,
+) -> dict:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        if mapping_id is not None:
+            row = await conn.fetchrow("""
+                UPDATE public.contacts_map
+                SET cpf_cnpj_normalized = $2,
+                    contato_a_id = COALESCE($3, contato_a_id),
+                    contato_c_id = $4,
+                    source_fingerprint = $5,
+                    source_order_a_id = COALESCE($6, source_order_a_id),
+                    source_order_date = COALESCE($7, source_order_date),
+                    last_confirmed_at = CASE WHEN $8 THEN NOW() ELSE last_confirmed_at END,
+                    last_used_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = $1
+                RETURNING *
+            """, mapping_id, cpf_cnpj_normalized, contato_a_id, contato_c_id,
+                source_fingerprint, source_order_a_id, source_order_date, confirmed)
+        else:
+            row = await conn.fetchrow("""
+                INSERT INTO public.contacts_map (
+                    cpf_cnpj_normalized, contato_a_id, contato_c_id,
+                    source_fingerprint, source_order_a_id, source_order_date,
+                    last_confirmed_at, last_used_at, updated_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $7 THEN NOW() END, NOW(), NOW())
+                ON CONFLICT (cpf_cnpj_normalized) DO UPDATE
+                SET contato_a_id = COALESCE(EXCLUDED.contato_a_id, public.contacts_map.contato_a_id),
+                    contato_c_id = EXCLUDED.contato_c_id,
+                    source_fingerprint = EXCLUDED.source_fingerprint,
+                    source_order_a_id = COALESCE(EXCLUDED.source_order_a_id, public.contacts_map.source_order_a_id),
+                    source_order_date = COALESCE(EXCLUDED.source_order_date, public.contacts_map.source_order_date),
+                    last_confirmed_at = CASE WHEN $7 THEN NOW() ELSE public.contacts_map.last_confirmed_at END,
+                    last_used_at = NOW(),
+                    updated_at = NOW()
+                RETURNING *
+            """, cpf_cnpj_normalized, contato_a_id, contato_c_id, source_fingerprint,
+                source_order_a_id, source_order_date, confirmed)
+        if row is None:
+            raise RuntimeError("Failed to save contact mapping")
+        return dict(row)
+
+
+async def remove_contact_mapping(mapping_id: int) -> None:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        await conn.execute("DELETE FROM public.contacts_map WHERE id = $1", mapping_id)
+
+
 async def insert_event(
     event_key: str,
     source: str,
@@ -318,8 +472,13 @@ async def insert_event(
 
 
 async def insert_job(job_type: str, dedupe_key: str, event_id: str | None, payload: dict | None = None, delay_minutes: int = 0) -> bool:
+    if job_type not in ALLOWED_JOB_TYPES:
+        logger.error(f"Rejected unknown job_type: {job_type}")
+        return False
+
     p = await get_pool()
     payload_str = json.dumps(payload) if payload else '{}'
+    revive_not_approved = is_approved_create_request(job_type, payload)
     async with p.acquire() as conn:
         try:
             if delay_minutes > 0:
@@ -331,12 +490,19 @@ async def insert_job(job_type: str, dedupe_key: str, event_id: str | None, paylo
                         payload = COALESCE(NULLIF($3::jsonb, '{}'::jsonb), public.jobs.payload),
                         attempts = 0,
                         last_error = NULL,
+                        action_preview = NULL,
                         run_after = NOW() + ($4::int || ' minutes')::interval,
                         locked_at = NULL,
                         locked_by = NULL,
                         updated_at = NOW()
                     WHERE public.jobs.status IN ('failed', 'dead')
-                """, job_type, dedupe_key, payload_str, delay_minutes)
+                       OR (
+                            $5::boolean
+                            AND public.jobs.job_type = 'create_order_c'
+                            AND public.jobs.status = 'done'
+                            AND public.jobs.action_preview->>'reason' = 'status_not_approved'
+                       )
+                """, job_type, dedupe_key, payload_str, delay_minutes, revive_not_approved)
             else:
                 result = await conn.execute("""
                     INSERT INTO public.jobs (job_type, dedupe_key, status, payload)
@@ -346,13 +512,20 @@ async def insert_job(job_type: str, dedupe_key: str, event_id: str | None, paylo
                         payload = COALESCE(NULLIF($3::jsonb, '{}'::jsonb), public.jobs.payload),
                         attempts = 0,
                         last_error = NULL,
+                        action_preview = NULL,
                         run_after = NOW(),
                         locked_at = NULL,
                         locked_by = NULL,
                         updated_at = NOW()
                     WHERE public.jobs.status IN ('failed', 'dead')
-                """, job_type, dedupe_key, payload_str)
-            return "INSERT" in result or "UPDATE" in result
+                       OR (
+                            $4::boolean
+                            AND public.jobs.job_type = 'create_order_c'
+                            AND public.jobs.status = 'done'
+                            AND public.jobs.action_preview->>'reason' = 'status_not_approved'
+                       )
+                """, job_type, dedupe_key, payload_str, revive_not_approved)
+            return bool(result) and result.split()[-1] == "1"
         except Exception as e:
             logger.error(f"Failed to insert job: {e}")
             try:
@@ -361,10 +534,19 @@ async def insert_job(job_type: str, dedupe_key: str, event_id: str | None, paylo
                     VALUES ($1::text, $2::text, 'queued')
                     ON CONFLICT (dedupe_key) DO NOTHING
                 """, job_type, dedupe_key)
-                return "INSERT" in result
+                return bool(result) and result.split()[-1] == "1"
             except Exception as e2:
                 logger.error(f"Failed to insert job fallback: {e2}")
                 return False
+
+
+async def job_exists(dedupe_key: str) -> bool:
+    p = await get_pool()
+    async with p.acquire() as conn:
+        return bool(await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM public.jobs WHERE dedupe_key = $1)",
+            dedupe_key,
+        ))
 
 
 async def reset_stale_locks() -> int:
@@ -400,7 +582,11 @@ async def fetch_and_lock_jobs(limit: int = 25) -> list[dict]:
                 SELECT id FROM public.jobs
                 WHERE status = 'queued' AND (run_after IS NULL OR run_after <= NOW())
                 ORDER BY
-                    CASE WHEN payload::jsonb->>'origin' = 'admin_export_ready' THEN 0 ELSE 1 END,
+                    CASE
+                        WHEN job_type IN ('sweep_origin_exports', 'reconcile_recent_statuses') THEN 0
+                        WHEN payload::jsonb->>'origin' = 'admin_export_ready' THEN 1
+                        ELSE 2
+                    END,
                     COALESCE(run_after, created_at) ASC,
                     created_at ASC
                 LIMIT $1
@@ -868,7 +1054,7 @@ async def get_order_mapping_by_a(venda_a_id: str) -> dict | None:
     p = await get_pool()
     async with p.acquire() as conn:
         row = await conn.fetchrow("""
-            SELECT external_key, venda_a_id, venda_c_id
+            SELECT external_key, venda_a_id, venda_c_id, last_sync_status, last_sync_at
             FROM public.orders_map
             WHERE venda_a_id = $1 AND venda_c_id IS NOT NULL
         """, int(venda_a_id))
@@ -914,7 +1100,7 @@ async def get_order_mapping_by_c(venda_c_id: str) -> dict | None:
     p = await get_pool()
     async with p.acquire() as conn:
         row = await conn.fetchrow("""
-            SELECT external_key, venda_a_id, venda_c_id
+            SELECT external_key, venda_a_id, venda_c_id, last_sync_status, last_sync_at
             FROM public.orders_map
             WHERE venda_c_id::text = $1
         """, venda_c_id)
@@ -936,8 +1122,25 @@ async def update_orders_map_sync(venda_a_id: str, venda_c_id: str, sync_status: 
 
 
 async def check_is_echo(source: str, venda_id: str, codigo_situacao: str) -> bool:
-    """Verifica se um webhook é eco de um sync_status recente (últimos 5 minutos)."""
+    """Detecta eco concluído ou ainda em execução para evitar ciclos de webhook."""
     p = await get_pool()
+    normalized = str(codigo_situacao or "").strip().lower()
+    status_codes = {
+        "em_aberto": "0",
+        "faturado": "1",
+        "cancelado": "2",
+        "aprovado": "3",
+        "preparando_envio": "4",
+        "enviado": "5",
+        "entregue": "6",
+        "pronto_envio": "7",
+        "dados_incompletos": "8",
+        "nao_entregue": "9",
+    }
+    accepted_statuses = [normalized]
+    if status_codes.get(normalized):
+        accepted_statuses.append(status_codes[normalized])
+
     async with p.acquire() as conn:
         if source == "A":
             row = await conn.fetchrow("""
@@ -945,14 +1148,42 @@ async def check_is_echo(source: str, venda_id: str, codigo_situacao: str) -> boo
                 WHERE venda_a_id::text = $1
                   AND last_sync_status = $2
                   AND last_sync_at > NOW() - INTERVAL '5 minutes'
-            """, venda_id, codigo_situacao)
+            """, venda_id, normalized)
+            if row:
+                return True
+            row = await conn.fetchrow("""
+                SELECT j.id
+                FROM public.jobs j
+                JOIN public.orders_map om
+                  ON om.venda_c_id::text = j.payload::jsonb->>'venda_id'
+                WHERE om.venda_a_id::text = $1
+                  AND j.job_type = 'sync_status'
+                  AND j.status = 'running'
+                  AND j.payload::jsonb->>'source' = 'B'
+                  AND j.payload::jsonb->>'codigo_situacao' = ANY($2::text[])
+                LIMIT 1
+            """, venda_id, accepted_statuses)
         elif source == "B":
             row = await conn.fetchrow("""
                 SELECT last_sync_status, last_sync_at FROM public.orders_map
                 WHERE venda_c_id::text = $1
                   AND last_sync_status = $2
                   AND last_sync_at > NOW() - INTERVAL '5 minutes'
-            """, venda_id, codigo_situacao)
+            """, venda_id, normalized)
+            if row:
+                return True
+            row = await conn.fetchrow("""
+                SELECT j.id
+                FROM public.jobs j
+                JOIN public.orders_map om
+                  ON om.venda_a_id::text = j.payload::jsonb->>'venda_id'
+                WHERE om.venda_c_id::text = $1
+                  AND j.job_type = 'sync_status'
+                  AND j.status = 'running'
+                  AND j.payload::jsonb->>'source' = 'A'
+                  AND j.payload::jsonb->>'codigo_situacao' = ANY($2::text[])
+                LIMIT 1
+            """, venda_id, accepted_statuses)
         else:
             return False
         return row is not None

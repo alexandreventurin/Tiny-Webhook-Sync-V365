@@ -35,7 +35,7 @@ def get_credentials(account: str) -> tuple[str, str]:
 
 def get_redirect_uri(account: str) -> str:
     base = APP_BASE_URL.rstrip("/") if APP_BASE_URL else ""
-    path_segment = "c" if account == "B" else account.lower()
+    path_segment = "v365" if account == "B" else "rj"
     return f"{base}/auth/{path_segment}/callback"
 
 
